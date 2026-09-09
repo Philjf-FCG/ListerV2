@@ -68,6 +68,8 @@ def generate(req: GenerateRequest):
                     condition_hint=req.condition,
                     price_hint=req.price_hint,
                 )
+                # Use Ollama's suggested price or fall back to provided price hint
+                listing_price = copy.get("suggested_price_gbp") or req.price_hint
                 cur = conn.execute(
                     """INSERT INTO listings
                         (photo_items, thumbnail_urls, platform, title, description, price, condition, tags, status)
@@ -78,7 +80,7 @@ def generate(req: GenerateRequest):
                         platform,
                         copy.get("title"),
                         copy.get("description"),
-                        copy.get("suggested_price_gbp"),
+                        listing_price,
                         copy.get("condition"),
                         copy.get("tags"),
                     ),

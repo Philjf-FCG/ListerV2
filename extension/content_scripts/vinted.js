@@ -150,12 +150,28 @@ function scrapeVintedListings() {
       anchor.closest("li, article, div[data-testid*='item'], div[class*='feed-grid'], div[class*='item-box'], div[class*='closet'], div[class*='grid__item']") ||
       anchor.parentElement ||
       anchor;
-    const img = container.querySelector("img");
-    let photo_url = img?.src || img?.getAttribute("data-src") || null;
-    if (!photo_url && img?.srcset) {
-      photo_url = img.srcset.split(",")[0].trim().split(" ")[0];
+    
+    // Collect ALL images in the container (not just the first one)
+    const allImages = Array.from(container.querySelectorAll("img"));
+    let photo_urls = [];
+    for (const img of allImages) {
+      let url = img.src || img.getAttribute("data-src") || null;
+      if (!url && img.srcset) {
+        // Get highest resolution image from srcset
+        const srcsetEntries = img.srcset.split(",").map(entry => entry.trim());
+        // Sort by width descriptor (e.g., "800w") and pick the largest
+        url = srcsetEntries.sort((a, b) => {
+          const wA = parseInt(a.match(/(\d+)w$/)?.[1] || "0");
+          const wB = parseInt(b.match(/(\d+)w$/)?.[1] || "0");
+          return wB - wA;
+        })[0]?.split(" ")[0] || null;
+      }
+      if (url && !photo_urls.includes(url)) {
+        photo_urls.push(url);
+      }
     }
-    let title = img?.alt || anchor.getAttribute("title") || anchor.getAttribute("aria-label") || "";
+    
+    let title = container.querySelector("img")?.alt || anchor.getAttribute("title") || anchor.getAttribute("aria-label") || "";
     if (!title || title.length < 2) {
       const titleEl = container.querySelector("[data-testid*='title'], [class*='title'], p, span");
       title = titleEl?.textContent?.trim() || anchor.textContent?.trim() || "";
@@ -163,7 +179,9 @@ function scrapeVintedListings() {
     if (!title) title = "Untitled Vinted item";
     const priceMatch = (container.textContent || "").match(/[£$€]\s?\d+([.,]\d{2})?/);
     const price = priceMatch ? priceMatch[0].replace(/[£$€]\s?/, "") : null;
-    items.push({ url: href, title: title.slice(0, 120), price, photo_url });
+    
+    // Pass all photo URLs so the backend can download them all
+    items.push({ url: href, title: title.slice(0, 120), price, photo_urls });
   });
   return items;
 }

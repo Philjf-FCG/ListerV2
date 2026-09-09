@@ -42,6 +42,12 @@ VARIETY AND STYLE RULES:
     * A direct, no-nonsense statement ("Let's talk about why this is currently sitting in my wardrobe.")
     * A rhetorical question or bold claim.
 
+VINTED TITLE FORMAT (for platform="vinted"):
+ - When creating Vinted listings, the title MUST follow this exact format:
+   "Era + item type + category + material + brand + colour + size"
+ - Example: "1990s Knitwear Cardigan Cashmere Chanel Blue Size M"
+ - Keep it concise but include all key attributes
+
 Always respond with STRICT JSON matching this schema, no markdown fences, no commentary:
 {
   "title": "short punchy listing title, <= 80 chars",
@@ -96,6 +102,13 @@ def generate_listing_copy(
         user_prompt += f"Seller-stated condition: {condition_hint}\n"
     if price_hint:
         user_prompt += f"Seller's rough price estimate (GBP) for reference (final pricing will follow fair market value guidelines): {price_hint}\n"
+    
+    # Add Vinted title format requirement
+    if platform == "vinted":
+        user_prompt += "\nCRITICAL: For Vinted listings, your title MUST follow this exact format:\n"
+        user_prompt += "Era + item type + category + material + brand + colour + size\n"
+        user_prompt += 'Example: "1990s Knitwear Cardigan Cashmere Chanel Blue Size M"\n'
+    
     user_prompt += "Write the listing now, following the JSON schema exactly."
 
     payload = {

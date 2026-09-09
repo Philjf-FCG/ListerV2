@@ -90,12 +90,20 @@ def upsert_vinted_items(items: list[VintedItemIn]):
     """Extension posts whatever it scraped from the Vinted listings page here."""
     with get_connection() as conn:
         for item in items:
+            # Handle both photo_url (single, backward compat) and photo_urls (array)
+            photo_data = None
+            if item.photo_urls is not None:
+                photo_data = json.dumps(item.photo_urls)
+            elif item.photo_url is not None:
+                # Backward compatibility: convert single photo_url to array format
+                photo_data = json.dumps([item.photo_url])
+            
             conn.execute(
-                """INSERT INTO vinted_items (url, title, price, photo_url)
+                """INSERT INTO vinted_items (url, title, price, photo_urls)
                    VALUES (?, ?, ?, ?)
                    ON CONFLICT(url) DO UPDATE SET title = excluded.title,
-                        price = excluded.price, photo_url = excluded.photo_url""",
-                (item.url, item.title, item.price, item.photo_url),
+                        price = excluded.price, photo_urls = excluded.photo_urls""",
+                (item.url, item.title, item.price, photo_data),
             )
     return {"status": "ok", "count": len(items)}
 
@@ -152,24 +160,41 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
                 img.save(buf, "JPEG", quality=90)
                 images.append(buf.getvalue())
     else:
-        if not row["photo_url"]:
+        # Fallback: if no local photos, use photo_urls from database (array format)
+        photo_data_str = row.get("photo_urls")
+        if not photo_data_str:
             raise HTTPException(status_code=400, detail="This item has no photos to work from")
+        
+        import json
+        try:
+            photo_urls = json.loads(photo_data_str)
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(status_code=500, detail=f"Invalid photo_urls data: {photo_data_str}")
+        
+        if not photo_urls:
+            raise HTTPException(status_code=400, detail="This item has no photos to work from")
+        
+        # Use first photo as fallback (would need more complex logic to download all)
+        primary_url = photo_urls[0]
         try:
             with httpx.Client(timeout=30, follow_redirects=True) as client:
-                photo_resp = client.get(row["photo_url"])
+                photo_resp = client.get(primary_url)
                 photo_resp.raise_for_status()
                 image_bytes = photo_resp.content
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=f"Couldn't fetch Vinted photo: {exc}") from exc
         images = [image_bytes]
-        photo_items_data = [{"source": "url", "ref": row["photo_url"]}]
-        thumbnail_urls_data = [row["photo_url"]]
+        photo_items_data = [{"source": "url", "ref": primary_url}]
+        thumbnail_urls_data = [primary_url]
 
     hint = item_hint or f"Originally listed on Vinted as: {row['title']}"
     try:
         copy = generate_listing_copy(images=images, platform="ebay", item_hint=hint, price_hint=row["price"])
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Ollama generation failed: {exc}") from exc
+
+    # Use Ollama's suggested price or fall back to Vinted price (ensure non-None)
+    listing_price = copy.get("suggested_price_gbp") or row["price"] or ""
 
     with get_connection() as conn:
         cur = conn.execute(
@@ -181,7 +206,7 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
                 json.dumps(thumbnail_urls_data),
                 copy.get("title"),
                 copy.get("description"),
-                copy.get("suggested_price_gbp") or row["price"],
+                listing_price,
                 copy.get("condition"),
                 copy.get("tags"),
             ),

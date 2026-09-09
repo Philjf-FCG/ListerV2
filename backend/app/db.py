@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS vinted_items (
     url TEXT NOT NULL UNIQUE,      -- Vinted item URL, used as the natural dedupe key
     title TEXT NOT NULL,
     price TEXT,
-    photo_url TEXT,                -- public Vinted CDN URL, fetchable without auth
+    photo_urls TEXT,               -- JSON array of photo URLs (all photos from Vinted)
     imported_listing_id INTEGER,   -- set once turned into a Lister listing via /sync/import
     scraped_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -96,6 +96,28 @@ def _migrate_legacy_single_photo_columns(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE listings_new RENAME TO listings")
 
 
+def _migrate_vinted_items_photo_urls(conn: sqlite3.Connection) -> None:
+    """Convert photo_url (singular) to photo_urls (array) in vinted_items table."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(vinted_items)").fetchall()}
+    
+    # If we already have photo_urls, nothing to do
+    if "photo_urls" in columns:
+        return
+    
+    # Add new column
+    conn.execute("ALTER TABLE vinted_items ADD COLUMN photo_urls TEXT")
+    
+    # Migrate existing data: convert single photo_url to JSON array
+    for row in conn.execute("SELECT id, photo_url FROM vinted_items WHERE photo_url IS NOT NULL").fetchall():
+        import json
+        conn.execute(
+            "UPDATE vinted_items SET photo_urls = ? WHERE id = ?",
+            (json.dumps([row["photo_url"]]), row["id"])
+        )
+    
+    # Old column kept for backward compat during transition
+
+
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(_SCHEMA)
@@ -105,6 +127,7 @@ def init_db() -> None:
         if "thumbnail_urls" not in columns:
             conn.execute("ALTER TABLE listings ADD COLUMN thumbnail_urls TEXT")
         _migrate_legacy_single_photo_columns(conn)
+        _migrate_vinted_items_photo_urls(conn)
 
 
 @contextmanager

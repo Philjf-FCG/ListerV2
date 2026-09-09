@@ -69,7 +69,7 @@ class VintedItemIn(BaseModel):
     url: str
     title: str
     price: str | None = None
-    photo_url: str | None = None
+    photo_urls: list[str] | None = None  # Changed from photo_url to accept multiple photos
 
 
 class VintedItemOut(BaseModel):
@@ -77,7 +77,7 @@ class VintedItemOut(BaseModel):
     url: str
     title: str
     price: str | None
-    photo_url: str | None
+    photo_urls: list[str] | None  # Changed from photo_url to match input schema
     imported_listing_id: int | None
     scraped_at: str
     on_ebay: bool = False
