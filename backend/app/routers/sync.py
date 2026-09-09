@@ -109,20 +109,28 @@ def upsert_vinted_items(items: list[VintedItemIn]):
 
 
 @router.get("/vinted/items", response_model=list[VintedItemOut])
-def list_vinted_items(check_ebay: bool = True):
+def list_vinted_items(check_ebay: bool = True, skip_ebay_check: bool = False):
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM vinted_items ORDER BY scraped_at DESC").fetchall()
 
     ebay_titles: list[str] = []
-    if check_ebay and rows and ebay_client.is_connected():
+    if check_ebay and rows and not skip_ebay_check and ebay_client.is_connected():
         try:
             ebay_titles = ebay_client.get_active_listing_titles()
         except RuntimeError:
+            # eBay API error - continue without checking (items will show as not on eBay)
             ebay_titles = []
 
     results = []
     for row in rows:
         data = dict(row)
+        # Parse JSON strings to Python lists
+        if isinstance(data.get("photo_urls"), str):
+            try:
+                data["photo_urls"] = json.loads(data["photo_urls"])
+            except (json.JSONDecodeError, TypeError):
+                data["photo_urls"] = None
+        
         on_ebay = bool(data["imported_listing_id"]) or (
             bool(ebay_titles) and _best_match_ratio(data["title"], ebay_titles) >= _MATCH_THRESHOLD
         )
@@ -174,18 +182,25 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
         if not photo_urls:
             raise HTTPException(status_code=400, detail="This item has no photos to work from")
         
-        # Use first photo as fallback (would need more complex logic to download all)
-        primary_url = photo_urls[0]
-        try:
-            with httpx.Client(timeout=30, follow_redirects=True) as client:
-                photo_resp = client.get(primary_url)
-                photo_resp.raise_for_status()
-                image_bytes = photo_resp.content
-        except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=f"Couldn't fetch Vinted photo: {exc}") from exc
-        images = [image_bytes]
-        photo_items_data = [{"source": "url", "ref": primary_url}]
-        thumbnail_urls_data = [primary_url]
+        # Download all photos from the URL array
+        images = []
+        photo_items_data = []
+        thumbnail_urls_data = []
+        for url in photo_urls:
+            try:
+                with httpx.Client(timeout=30, follow_redirects=True) as client:
+                    photo_resp = client.get(url)
+                    photo_resp.raise_for_status()
+                    image_bytes = photo_resp.content
+                images.append(image_bytes)
+                photo_items_data.append({"source": "url", "ref": url})
+                thumbnail_urls_data.append(url)
+            except httpx.HTTPError as exc:
+                # Skip failed photos but continue with others
+                print(f"Warning: Could not fetch photo {url}: {exc}")
+        
+        if not images:
+            raise HTTPException(status_code=400, detail="Could not download any photos from Vinted")
 
     hint = item_hint or f"Originally listed on Vinted as: {row['title']}"
     try:
