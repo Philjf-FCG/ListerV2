@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Lister - Draft Assistant",
+  "version": "1.0.0",
+  "description": "Fills Vinted/eBay listing forms from Lister-generated copy and saves them as DRAFTS only. Never publishes automatically.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Lister drafts"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "http://localhost:8010/*",
+    "https://*.vinted.co.uk/*",
+    "https://*.vinted.com/*",
+    "https://*.vinted.fr/*",
+    "https://*.vinted.de/*",
+    "https://*.vinted.es/*",
+    "https://*.vinted.it/*",
+    "https://*.vinted.nl/*",
+    "https://*.vinted.be/*",
+    "https://*.vinted.pl/*",
+    "https://*.ebay.co.uk/*",
+    "https://*.ebay.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.vinted.co.uk/*",
+        "https://*.vinted.com/*",
+        "https://*.vinted.fr/*",
+        "https://*.vinted.de/*",
+        "https://*.vinted.es/*",
+        "https://*.vinted.it/*",
+        "https://*.vinted.nl/*",
+        "https://*.vinted.be/*",
+        "https://*.vinted.pl/*"
+      ],
+      "js": ["content_scripts/vinted.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.ebay.co.uk/*", "https://*.ebay.com/*"],
+      "js": ["content_scripts/ebay.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+Dear Hiring Team,
+
+I am writing to express my strong interest in the DevOps Manager position at Airbox Systems Limited. With over thirty years of experience in technical operations, system automation, and technical leadership, I have dedicated my career to building resilient, scalable infrastructure that empowers development teams and ensures absolute system reliability. Knowing that Airbox Systems provides critical, real-time situational awareness software to emergency services and defense sectors, I understand that for your platforms, uptime and deployment integrity aren't just business metrics—they are mission-critical requirements.
+
+My experience has been in projects for commercial and government clients, including some that required the heghest level of security clearence.
+
+Throughout my career, I have specialized in bridging the gap between complex software development and robust technical operations. My experience spans designing automated CI/CD pipelines, optimizing infrastructure-as-code architectures, and managing complex build systems. Currently, as an independent operations consultant, I provide strategic guidance to multiple studios, solving deep-seated bottlenecks in their deployment pipelines and securing their automation ecosystems. Transitioning my leadership back to a dedicated internal team at Airbox feels like the perfect alignment of my operational expertise and my passion for high-consequence, impactful technology.
+
+Some highlights of my background that directly align with the needs of a DevOps Manager include:
+
+Infrastructure & Automation Leadership: Proven track record of designing and maintaining highly secure, automated deployment pipelines that significantly reduce release cycle times while increasing deployment predictability.  Thiese have been proven in milatary, border defence and financial projects.
+
+Technical Architecture & Scaling: Deep experience with containerization, cloud or hybrid infrastructure management, and building automated systems for continuous integration and documentation.
+
+Team Leadership & Governance: A collaborative leadership style focused on mentoring engineers, implementing rigorous security baselines, and fostering a modern DevOps culture that eliminates silos between development and operations.
+
+I approach DevOps not just as a set of tools like the Hashicorp suite, but as a core business strategy centered on stability, speed, and security. I am incredibly eager to bring my three decades of operational knowledge to Airbox Systems, ensuring your engineering teams can deploy rapidly and confidently as you continue to support vital public safety and defense operations.
+
+Thank you for your time and consideration. I welcome the opportunity to discuss how my technical leadership and operational background can support the next phase of Airbox Systems' infrastructure growth.
+
+Sincerely,
+
+Phil

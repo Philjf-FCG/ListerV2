@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: system-ui, sans-serif; width: 340px; padding: 0.75rem; }
+    h1 { font-size: 1rem; margin: 0 0 0.5rem; }
+    .listing { border: 1px solid #ddd; border-radius: 6px; padding: 0.5rem; margin-bottom: 0.5rem; }
+    .listing .title { font-weight: 600; font-size: 0.9rem; }
+    .listing .platform { font-size: 0.75rem; color: #555; text-transform: uppercase; }
+    button { width: 100%; margin-top: 0.35rem; padding: 0.35rem; cursor: pointer; }
+    .empty { color: #666; font-size: 0.85rem; }
+    .note { font-size: 0.7rem; color: #888; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Lister - ready to draft</h1>
+  <div id="list"></div>
+  <p class="note">This never publishes a listing. It only fills the form and saves/keeps it as a draft for you to review.</p>
+  <hr />
+  <button id="sync-vinted-btn">Sync Vinted listings from this tab</button>
+  <p id="sync-status" class="note"></p>
+  <script src="popup.js"></script>
+</body>
+</html>

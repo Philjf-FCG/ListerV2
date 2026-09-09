@@ -1,0 +1,74 @@
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  background: #fafafa;
+  color: #222;
+}
+header h1 { margin-bottom: 0.2rem; }
+.subtitle { color: #666; margin-top: 0; }
+section { margin-bottom: 2.5rem; }
+.row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+button {
+  background: #2b6cb0;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:hover { background: #235a94; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+.card {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+.card.selected { outline: 2px solid #2b6cb0; }
+.card img { width: 100%; border-radius: 6px; object-fit: cover; max-height: 160px; }
+.card textarea { width: 100%; min-height: 100px; margin-top: 0.5rem; }
+.card .meta { font-size: 0.85rem; color: #555; }
+.thumb-row { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.thumb-small { width: 64px; height: 64px; border-radius: 6px; object-fit: cover; }
+.generate-bar {
+  display: none;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-top: 1rem;
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.06);
+}
+.status-draft_pending { color: #b7791f; }
+.status-reviewed_ready { color: #2f855a; }
+.status-posted_as_draft { color: #2b6cb0; }
+.status-failed { color: #c53030; }
+.publish-ebay-btn {
+  background: #276749;
+  color: white;
+  width: 100%;
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+.publish-ebay-btn:hover {
+  background: #22543d;
+}
+.platform-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #edf2f7;
+  margin-bottom: 0.25rem;
+}

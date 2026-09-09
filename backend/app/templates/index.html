@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Lister</title>
+  <link rel="stylesheet" href="/static/style.css?v=2" />
+</head>
+<body>
+  <header>
+    <h1>Lister</h1>
+    <p class="subtitle">Photo in, funny-but-honest listing out. Nothing posts live without your say-so.</p>
+  </header>
+
+  <section id="scan-panel">
+    <h2>1. Find photos</h2>
+    <div class="row">
+      <label><input type="radio" name="src" value="local" checked /> Local machine</label>
+      <label><input type="radio" name="src" value="google" /> Google Photos</label>
+    </div>
+    <div class="row">
+      <label>Date <input type="date" id="filter-date" /></label>
+      <label><input type="checkbox" id="filter-today" /> Taken today</label>
+      <label>After <input type="time" id="filter-after" /></label>
+      <label>Before <input type="time" id="filter-before" /></label>
+      <button id="scan-btn">Scan photos</button>
+      <button id="google-connect-btn">Connect Google Photos</button>
+    </div>
+    <div id="photo-grid" class="grid"></div>
+
+    <div id="generate-bar" class="generate-bar">
+      <span id="generate-count-label">0 photos selected</span>
+      <label><input type="checkbox" class="generate-plat" value="vinted" checked /> Vinted</label>
+      <label><input type="checkbox" class="generate-plat" value="ebay" checked /> eBay</label>
+      <input type="text" id="generate-hint" placeholder="optional notes e.g. size, brand" />
+      <button id="generate-selected-btn">Generate listing copy</button>
+    </div>
+  </section>
+
+  <section id="listings-panel">
+    <h2>2. Review generated listings</h2>
+    <p class="subtitle">Tick as many photos of the <em>same item</em> as you like above (front, back, label, damage close-up, etc.) then generate one listing from all of them.</p>
+    <p class="subtitle">eBay listings can be pushed straight to a real draft via eBay's API (no browser automation needed) - <button id="ebay-connect-btn">Connect eBay</button> once first.</p>
+    <div id="listing-list" class="grid"></div>
+  </section>
+
+  <section id="sync-panel">
+    <h2>3. Vinted &rarr; eBay sync</h2>
+    <p class="subtitle">
+      In the extension popup, open your Vinted Profile page and click "Sync Vinted listings from this tab" to
+      pull in your live Vinted listings, then check here for anything missing on eBay.
+    </p>
+    <div class="row">
+      <button id="refresh-sync-btn">Refresh from Lister</button>
+    </div>
+    <div id="sync-list" class="grid"></div>
+  </section>
+
+  <script src="/static/app.js?v=2"></script>
+</body>
+</html>
