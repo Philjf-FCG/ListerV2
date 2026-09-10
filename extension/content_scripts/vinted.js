@@ -177,8 +177,18 @@ function scrapeVintedListings() {
       title = titleEl?.textContent?.trim() || anchor.textContent?.trim() || "";
     }
     if (!title) title = "Untitled Vinted item";
+    
+    let price = null;
     const priceMatch = (container.textContent || "").match(/[£$€]\s?\d+([.,]\d{2})?/);
-    const price = priceMatch ? priceMatch[0].replace(/[£$€]\s?/, "") : null;
+    if (priceMatch) {
+      price = priceMatch[0].replace(/[£$€]\s?/, "");
+    } else {
+      // Fallback: try to extract from title
+      const titlePrice = title.match(/[£$€]\s?\d+([.,]\d{2})?/);
+      if (titlePrice) {
+        price = titlePrice[0].replace(/[£$€]\s?/, "");
+      }
+    }
     
     // Pass all photo URLs so the backend can download them all
     items.push({ url: href, title: title.slice(0, 120), price, photo_urls });

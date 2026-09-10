@@ -97,13 +97,21 @@ def upsert_vinted_items(items: list[VintedItemIn]):
             elif item.photo_url is not None:
                 # Backward compatibility: convert single photo_url to array format
                 photo_data = json.dumps([item.photo_url])
-            
+
+            # Fallback: try to extract price from title if not provided
+            price = item.price
+            if not price:
+                import re as _re
+                price_match = _re.search(r'[£$€]\s?(\d+[.,]?\d*)', item.title)
+                if price_match:
+                    price = price_match.group(1)
+
             conn.execute(
                 """INSERT INTO vinted_items (url, title, price, photo_urls)
                    VALUES (?, ?, ?, ?)
                    ON CONFLICT(url) DO UPDATE SET title = excluded.title,
                         price = excluded.price, photo_urls = excluded.photo_urls""",
-                (item.url, item.title, item.price, photo_data),
+                (item.url, item.title, price, photo_data),
             )
     return {"status": "ok", "count": len(items)}
 
