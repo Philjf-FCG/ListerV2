@@ -151,25 +151,81 @@ function scrapeVintedListings() {
       anchor.parentElement ||
       anchor;
     
-    // Collect ALL images in the container (not just the first one)
+    // Debug: Log container structure to understand Vinted's DOM
+    console.log(`[Lister] Container type: ${container.tagName}, class: ${container.className}`);
+    console.log(`[Lister] Container has ${container.querySelectorAll("img").length} img elements total`);
+    
+    // Collect ALL images in the container (not just img tags - also check for background-image)
     const allImages = Array.from(container.querySelectorAll("img"));
     let photo_urls = [];
+    
+    console.log(`[Lister] Found ${allImages.length} img elements in container for ${href}`);
+    
     for (const img of allImages) {
-      let url = img.src || img.getAttribute("data-src") || null;
-      if (!url && img.srcset) {
-        // Get highest resolution image from srcset
+      // Check multiple attributes that might contain image URLs
+      let url = img.src || 
+                img.getAttribute("data-src") || 
+                img.getAttribute("data-lazy-src") ||
+                img.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0] ||
+                null;
+      
+      // If srcset exists, get highest resolution
+      if (img.srcset && !url) {
         const srcsetEntries = img.srcset.split(",").map(entry => entry.trim());
-        // Sort by width descriptor (e.g., "800w") and pick the largest
         url = srcsetEntries.sort((a, b) => {
           const wA = parseInt(a.match(/(\d+)w$/)?.[1] || "0");
           const wB = parseInt(b.match(/(\d+)w$/)?.[1] || "0");
           return wB - wA;
         })[0]?.split(" ")[0] || null;
       }
+      
+      // Check data attributes for more image URLs
+      if (!url) {
+        for (const key in img.dataset) {
+          const val = img.dataset[key];
+          if (val && /https?:\/\/.*\.(jpg|jpeg|png|webp)/i.test(val)) {
+            url = val;
+            break;
+          }
+        }
+      }
+      
       if (url && !photo_urls.includes(url)) {
+        // Normalize URL - Vinted uses webp, convert to jpg for consistency
+        url = url.replace(/\.webp(\?.*)?$/, ".jpg$1");
         photo_urls.push(url);
+        console.log(`[Lister] Found image: ${url.substring(0, 60)}...`);
       }
     }
+    
+    // Also check for background images in the container
+    const bgImages = Array.from(container.querySelectorAll("[style*='background-image'], [data-background*='url']"))
+      .map(el => {
+        let style = el.getAttribute("style");
+        let url = null;
+        
+        if (style) {
+          const match = style.match(/url\(['"]?([^'")]+)['"]?\)/);
+          if (match) url = match[1];
+        }
+        
+        // Check data-background attribute
+        if (!url) {
+          const bgData = el.getAttribute("data-background");
+          if (bgData) {
+            const match = bgData.match(/url\(['"]?([^'")]+)['"]?\)/);
+            if (match) url = match[1];
+          }
+        }
+        
+        return url;
+      })
+      .filter(url => url && !photo_urls.includes(url))
+      // Normalize background image URLs
+      .map(url => url.replace(/\.webp(\?.*)?$/, ".jpg$1"));
+    photo_urls.push(...bgImages);
+    
+    console.log(`[Lister] Total photos found for ${href}: ${photo_urls.length}`);
     
     let title = container.querySelector("img")?.alt || anchor.getAttribute("title") || anchor.getAttribute("aria-label") || "";
     if (!title || title.length < 2) {
