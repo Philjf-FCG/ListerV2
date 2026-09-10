@@ -93,7 +93,9 @@ def upsert_vinted_items(items: list[VintedItemIn]):
             # Handle both photo_url (single, backward compat) and photo_urls (array)
             photo_data = None
             if item.photo_urls is not None:
-                photo_data = json.dumps(item.photo_urls)
+                # Only save non-empty arrays
+                if len(item.photo_urls) > 0:
+                    photo_data = json.dumps(item.photo_urls)
             elif item.photo_url is not None:
                 # Backward compatibility: convert single photo_url to array format
                 photo_data = json.dumps([item.photo_url])
@@ -177,7 +179,7 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
                 images.append(buf.getvalue())
     else:
         # Fallback: if no local photos, use photo_urls from database (array format)
-        photo_data_str = row.get("photo_urls")
+        photo_data_str = row["photo_urls"]
         if not photo_data_str:
             raise HTTPException(status_code=400, detail="This item has no photos to work from")
         

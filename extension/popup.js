@@ -54,14 +54,22 @@ async function openAndFill(listing) {
 
 async function sendVintedMessage(tabId, message) {
   try {
+    console.log(`[Lister] Sending message to tab ${tabId}:`, message);
     return await chrome.tabs.sendMessage(tabId, message);
-  } catch {
+  } catch (err) {
+    console.warn(`[Lister] Failed to send message to tab ${tabId}:`, err);
     // If content script wasn't injected yet (e.g. tab opened before extension reload), inject it dynamically
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["content_scripts/vinted.js"],
-    });
-    return await chrome.tabs.sendMessage(tabId, message);
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["content_scripts/vinted.js"],
+      });
+      console.log(`[Lister] Content script injected into tab ${tabId}`);
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (injectErr) {
+      console.error("[Lister] Failed to inject content script:", injectErr);
+      throw injectErr;
+    }
   }
 }
 
@@ -69,13 +77,17 @@ async function syncVintedListings() {
   const statusEl = document.getElementById("sync-status");
   statusEl.textContent = "Scanning current tab...";
   try {
+    console.log("[Lister] Starting Vinted sync...");
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    console.log(`[Lister] Found tab: ${tab?.url}`);
     if (!tab?.url?.includes("vinted.")) {
       statusEl.textContent = "Open your Vinted Profile page in this tab first.";
       return;
     }
     const response = await sendVintedMessage(tab.id, { type: "LISTER_SCRAPE_VINTED" });
+    console.log("[Lister] Got response from content script:", response);
     const items = response?.items ?? [];
+    console.log(`[Lister] Found ${items.length} items`);
     if (!items.length) {
       statusEl.textContent = "Found 0 items on this page - make sure you're on your Vinted Profile page showing your items.";
       return;
@@ -85,9 +97,11 @@ async function syncVintedListings() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(items),
     });
+    console.log(`[Lister] Sync API response: ${res.status} ${await res.text()}`);
     if (!res.ok) throw new Error(`backend returned ${res.status}: ${await res.text()}`);
     statusEl.textContent = `Sent ${items.length} item(s) to Lister. Check the web UI's sync section.`;
   } catch (err) {
+    console.error("[Lister] Sync error:", err);
     statusEl.textContent = `Couldn't sync: ${err.message || err}`;
   }
 }

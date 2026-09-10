@@ -254,7 +254,10 @@ function scrapeVintedListings() {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "LISTER_SCRAPE_VINTED") {
-    sendResponse({ items: scrapeVintedListings() });
+    console.log("[Lister] Received LISTER_SCRAPE_VINTED message");
+    const items = scrapeVintedListings();
+    console.log(`[Lister] Returning ${items.length} items`, items);
+    sendResponse({ items: items });
     return true;
   }
   return false;
