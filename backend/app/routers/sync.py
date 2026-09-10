@@ -88,6 +88,11 @@ def _best_match_ratio(title: str, candidates: list[str]) -> float:
 @router.post("/vinted/items")
 def upsert_vinted_items(items: list[VintedItemIn]):
     """Extension posts whatever it scraped from the Vinted listings page here."""
+    # Debug: Log items received
+    import json as _json
+    with open("backend/vinted_scrape_debug.json", "w") as f:
+        _json.dump([dict(item) for item in items], f, indent=2)
+    
     with get_connection() as conn:
         for item in items:
             # Handle both photo_url (single, backward compat) and photo_urls (array)
