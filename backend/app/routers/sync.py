@@ -90,7 +90,7 @@ def upsert_vinted_items(items: list[VintedItemIn]):
     """Extension posts whatever it scraped from the Vinted listings page here."""
     # Debug: Log items received
     import json as _json
-    with open("backend/vinted_scrape_debug.json", "w") as f:
+    with open("vinted_scrape_debug.json", "w") as f:
         _json.dump([dict(item) for item in items], f, indent=2)
     
     with get_connection() as conn:
@@ -197,22 +197,37 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
         if not photo_urls:
             raise HTTPException(status_code=400, detail="This item has no photos to work from")
         
-        # Download all photos from the URL array
+        # Download or read all photos from the URL array (handling both HTTP and local file:// paths)
         images = []
         photo_items_data = []
         thumbnail_urls_data = []
         for url in photo_urls:
             try:
-                with httpx.Client(timeout=30, follow_redirects=True) as client:
-                    photo_resp = client.get(url)
-                    photo_resp.raise_for_status()
-                    image_bytes = photo_resp.content
-                images.append(image_bytes)
-                photo_items_data.append({"source": "url", "ref": url})
-                thumbnail_urls_data.append(url)
-            except httpx.HTTPError as exc:
+                if url.lower().startswith("file://"):
+                    clean_path = url[8:] if url.lower().startswith("file:///") else url[7:]
+                    p = Path(clean_path).resolve()
+                    if not p.exists():
+                        print(f"Warning: Local photo file not found: {p}")
+                        continue
+                    thumb = local.ensure_thumbnail(p)
+                    thumbnail_urls_data.append(f"/photos/thumbnail?path={thumb.name}")
+                    photo_items_data.append({"source": "local", "ref": str(p)})
+                    with Image.open(p) as img:
+                        img = img.convert("RGB")
+                        buf = io.BytesIO()
+                        img.save(buf, "JPEG", quality=90)
+                        images.append(buf.getvalue())
+                else:
+                    with httpx.Client(timeout=30, follow_redirects=True) as client:
+                        photo_resp = client.get(url)
+                        photo_resp.raise_for_status()
+                        image_bytes = photo_resp.content
+                    images.append(image_bytes)
+                    photo_items_data.append({"source": "url", "ref": url})
+                    thumbnail_urls_data.append(url)
+            except Exception as exc:
                 # Skip failed photos but continue with others
-                print(f"Warning: Could not fetch photo {url}: {exc}")
+                print(f"Warning: Could not fetch/load photo {url}: {exc}")
         
         if not images:
             raise HTTPException(status_code=400, detail="Could not download any photos from Vinted")
@@ -244,3 +259,37 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
         listing_id = cur.lastrowid
         conn.execute("UPDATE vinted_items SET imported_listing_id = ? WHERE id = ?", (listing_id, vinted_item_id))
     return {"status": "imported", "listing_id": listing_id}
+
+
+@router.post("/import-vinted-export")
+def import_vinted_export(
+    export_path: str = r"c:\vinted\data\listings\index.html"
+):
+    """Import Vinted data export HTML file and upsert items into database."""
+    from app.vinted_export_parser import parse_vinted_export
+    
+    if not Path(export_path).exists():
+        raise HTTPException(status_code=404, detail=f"Export file not found: {export_path}")
+    
+    try:
+        items = parse_vinted_export(export_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to parse export: {exc}") from exc
+    
+    # Upsert items into database
+    with get_connection() as conn:
+        for item in items:
+            # Extract Vinted item ID from URL if possible
+            url_match = re.search(r"/items/(\d+)", item.url) if item.url else None
+            item_id = url_match.group(1) if url_match else None
+            
+            # Convert photo URLs to JSON string
+            photo_urls_json = json.dumps(item.photo_urls)
+            
+            conn.execute(
+                """INSERT OR REPLACE INTO vinted_items (url, title, price, photo_urls, imported_listing_id)
+                   VALUES (?, ?, ?, ?, NULL)""",
+                (item.url or "", item.title, item.price, photo_urls_json)
+            )
+    
+    return {"status": "imported", "items_count": len(items)}

@@ -142,6 +142,19 @@ fillFromPendingListing();
 function scrapeVintedListings() {
   const seen = new Set();
   const items = [];
+  
+  // First, log the full structure of a sample item to understand Vinted's DOM
+  console.log("[Lister] === DOM STRUCTURE DEBUG ===");
+  const sampleAnchor = document.querySelector('a[href*="/items/"]');
+  if (sampleAnchor) {
+    const container = sampleAnchor.closest("li, article, div[data-testid*='item'], div[class*='feed-grid'], div[class*='item-box'], div[class*='closet'], div[class*='grid__item']") ||
+                     sampleAnchor.parentElement ||
+                     sampleAnchor;
+    
+    console.log("[Lister] Sample container:", container);
+    console.log("[Lister] Container outerHTML (first 2000 chars):", container.outerHTML.substring(0, 2000));
+  }
+  
   document.querySelectorAll('a[href*="/items/"]').forEach((anchor) => {
     const href = anchor.href;
     if (seen.has(href) || !/\/items\/\d+/.test(href)) return;
@@ -153,13 +166,59 @@ function scrapeVintedListings() {
     
     // Debug: Log container structure to understand Vinted's DOM
     console.log(`[Lister] Container type: ${container.tagName}, class: ${container.className}`);
-    console.log(`[Lister] Container has ${container.querySelectorAll("img").length} img elements total`);
+    
+    // Check if this is a carousel/grid item with multiple images
+    const carousel = container.querySelector('[class*="carousel"], [class*="gallery"], [class*="slider"]');
+    
+    // Log the full container HTML for debugging (first 3000 chars)
+    console.log(`[Lister] Container outerHTML preview:`, container.outerHTML.substring(0, 3000));
+    
+    let photo_urls = [];
+    // Check for embedded JSON data that might contain multiple photos
+    let jsonPhotos = [];
+    const metaJson = document.querySelector('script[type="application/json"][id*="initial-state"], script[data-ssr]');
+    if (metaJson) {
+      try {
+        const jsonData = JSON.parse(metaJson.textContent);
+        console.log(`[Lister] Found embedded JSON for ${href}`, jsonData);
+      } catch (e) {
+        // No valid JSON
+      }
+    }
+    
+    // Also check data attributes on container itself
+    if (container.dataset && container.dataset.json) {
+      try {
+        const jsonData = JSON.parse(container.dataset.json);
+        console.log(`[Lister] Container has JSON data:`, jsonData);
+        if (jsonData.photos && Array.isArray(jsonData.photos)) {
+          jsonPhotos = jsonData.photos.map(p => p.url || p).filter(u => u);
+        }
+      } catch (e) {
+        // No valid JSON
+      }
+    }
+    
+    let photo_urls = [];
+    
+    if (carousel) {
+      console.log(`[Lister] Found carousel/slider in container for ${href}`);
+      // Try to extract all image URLs from carousel items
+      const carouselImages = carousel.querySelectorAll('img, [data-image]');
+      console.log(`[Lister] Carousel has ${carouselImages.length} image elements`);
+      carouselImages.forEach((img, idx) => {
+        let url = img.src || img.getAttribute("data-src") || img.getAttribute("data-lazy-src");
+        if (url && !photo_urls.includes(url)) {
+          url = url.replace(/\.webp(\?.*)?$/, ".jpg$1");
+          photo_urls.push(url);
+          console.log(`[Lister] Carousel image ${idx}: ${url.substring(0, 60)}...`);
+        }
+      });
+    }
     
     // Collect ALL images in the container (not just img tags - also check for background-image)
     const allImages = Array.from(container.querySelectorAll("img"));
-    let photo_urls = [];
-    
-    console.log(`[Lister] Found ${allImages.length} img elements in container for ${href}`);
+    console.log(`[Lister] Container has ${allImages.length} img elements total`);
     
     for (const img of allImages) {
       // Check multiple attributes that might contain image URLs
@@ -223,6 +282,8 @@ function scrapeVintedListings() {
       .filter(url => url && !photo_urls.includes(url))
       // Normalize background image URLs
       .map(url => url.replace(/\.webp(\?.*)?$/, ".jpg$1"));
+    
+    console.log(`[Lister] Background images found:`, bgImages);
     photo_urls.push(...bgImages);
     
     console.log(`[Lister] Total photos found for ${href}: ${photo_urls.length}`);

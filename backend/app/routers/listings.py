@@ -159,7 +159,27 @@ def get_listing_photo(listing_id: int, index: int):
         raise HTTPException(status_code=404, detail="Photo index out of range")
     item = PhotoRef(**items[index])
 
+    # Check for local file URI scheme (file://) first, to handle Vinted export data paths.
+    ref_uri = item.ref
+    if ref_uri.lower().startswith("file:///"):
+        # On Windows file:///c:/... or file://c:\... can appear
+        clean_path = ref_uri[8:] if ref_uri.lower().startswith("file:///") else ref_uri[7:]
+        path = Path(clean_path).resolve()
+        if not path.exists():
+            raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")
+        mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+        return Response(content=path.read_bytes(), media_type=mime)
+    elif ref_uri.lower().startswith("file://"):
+        clean_path = ref_uri[7:]
+        path = Path(clean_path).resolve()
+        if not path.exists():
+            raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")
+        mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+        return Response(content=path.read_bytes(), media_type=mime)
+
     if item.source == "local":
+        # This block now only catches non-file:// local paths if they exist, but we prioritize the URI check above.
+        # We keep it for safety if path resolution fails differently.
         path = Path(item.ref)
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")

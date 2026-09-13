@@ -69,7 +69,8 @@ class VintedItemIn(BaseModel):
     url: str
     title: str
     price: str | None = None
-    photo_urls: list[str] | None = None  # Changed from photo_url to accept multiple photos
+    photo_urls: list[str] | None = None
+    photo_url: str | None = None  # Backward compatibility for single photo
 
 
 class VintedItemOut(BaseModel):
