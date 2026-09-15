@@ -218,7 +218,18 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
                         img.save(buf, "JPEG", quality=90)
                         images.append(buf.getvalue())
                 else:
-                    with httpx.Client(timeout=30, follow_redirects=True) as client:
+                    with httpx.Client(
+                        timeout=30,
+                        follow_redirects=True,
+                        headers={
+                            "Referer": "https://www.vinted.com/",
+                            "User-Agent": (
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/125.0.0.0 Safari/537.36"
+                            ),
+                        },
+                    ) as client:
                         photo_resp = client.get(url)
                         photo_resp.raise_for_status()
                         image_bytes = photo_resp.content

@@ -98,22 +98,45 @@ async function fillFromPendingListing() {
   const key = "lister_pending_vinted";
   const stored = await chrome.storage.local.get(key);
   const listing = stored[key];
-  if (!listing) return;
+  
+  if (!listing) {
+    console.error("[Lister] No pending Vinted listing in storage - popup may not have stashed data");
+    showBanner("No pending listing found. Try clicking 'Open Vinted & fill draft' again.");
+    return;
+  }
+
+  console.log("[Lister] fillFromPendingListing started, title:", listing.title);
+
+  // Vinted uses client-side rendering - wait for page to fully hydrate
+  if (document.readyState !== "complete") {
+    await new Promise(r => window.addEventListener("load", r));
+  }
+  console.log("[Lister] Page loaded, waiting for form fields...");
+  await new Promise(r => setTimeout(r, 2000));
 
   try {
-    const titleEl = await waitForElement(SELECTORS.title);
+    const titleEl = await waitForElement(SELECTORS.title, 15000);
+    console.log("[Lister] Found title field:", titleEl.tagName, titleEl.name || titleEl.getAttribute("data-testid"));
     setNativeValue(titleEl, listing.title ?? "");
+    // React may replace DOM after input events; brief pause then re-query
+    await new Promise(r => setTimeout(r, 300));
 
-    const descEl = await waitForElement(SELECTORS.description);
+    const descEl = await waitForElement(SELECTORS.description, 15000);
+    console.log("[Lister] Found description field:", descEl.tagName);
     setNativeValue(descEl, listing.description ?? "");
+    await new Promise(r => setTimeout(r, 300));
 
     if (listing.price) {
       try {
-        const priceEl = await waitForElement(SELECTORS.price, 5000);
+        const priceEl = await waitForElement(SELECTORS.price, 10000);
+        console.log("[Lister] Found price field:", priceEl.tagName);
         setNativeValue(priceEl, listing.price);
+        console.log("[Lister] Price value set to:", priceEl.value);
       } catch {
         console.warn("[Lister] price field not found, skipping");
       }
+    } else {
+      console.log("[Lister] No price to fill");
     }
 
     await uploadPhotos(listing);
@@ -125,10 +148,24 @@ async function fillFromPendingListing() {
       draftBtn.click();
       chrome.runtime.sendMessage({ type: "LISTER_MARK_POSTED", id: listing.id });
       showBanner("Saved as draft on Vinted.");
+    } else {
+      console.warn("[Lister] Save-draft button not found or has forbidden text");
     }
   } catch (err) {
-    console.warn("[Lister] Could not fill Vinted form:", err);
-    showBanner("Lister couldn't find the Vinted form fields - selectors may need updating.");
+    // More specific error message to help diagnose
+    const missing = [];
+    for (const [name, sel] of Object.entries(SELECTORS)) {
+      if (name !== "photoInput" && !document.querySelector(sel)) {
+        missing.push(name);
+      }
+    }
+    if (missing.length > 0) {
+      console.error(`[Lister] Fields not found after timeout: ${missing.join(", ")}`);
+      showBanner(`Lister couldn't find fields on Vinted: ${missing.join(", ")}. Selectors may need updating.`);
+    } else {
+      console.warn("[Lister] Could not fill Vinted form:", err);
+      showBanner("Lister couldn't find the Vinted form fields - selectors may need updating.");
+    }
   } finally {
     await chrome.storage.local.remove(key);
   }
