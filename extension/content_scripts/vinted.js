@@ -236,8 +236,6 @@ function scrapeVintedListings() {
       }
     }
     
-    let photo_urls = [];
-    
     if (carousel) {
       console.log(`[Lister] Found carousel/slider in container for ${href}`);
       // Try to extract all image URLs from carousel items
