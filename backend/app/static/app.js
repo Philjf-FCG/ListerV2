@@ -400,7 +400,7 @@ function renderSyncList(items) {
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
-      ${item.photo_url ? `<img src="${item.photo_url}" alt="thumb" />` : ""}
+      ${item.photo_urls && item.photo_urls.length > 0 ? `<img src="${item.photo_urls[0]}" alt="thumb" />` : ""}
       <div class="meta">${item.title}</div>
       <div class="meta">£${item.price ?? "?"}</div>
       <button class="import-btn">Generate eBay draft copy from this</button>
