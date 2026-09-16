@@ -1,4 +1,6 @@
 import json
+import logging
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
@@ -113,18 +115,26 @@ def push_listing_to_ebay(listing_id: int, category_id: str):
                 "SELECT url FROM vinted_items WHERE imported_listing_id = ?", (listing_id,)
             ).fetchone()
         if vinted_row:
+            logger.info("Vinted row found for listing %s: %s", listing_id, vinted_row["url"])
             local_photos = get_local_vinted_photos(vinted_row["url"])
+            logger.info("Local photos retrieved count: %d", len(local_photos))
             if local_photos:
                 photo_items = [{"source": "local", "ref": str(p)} for p in local_photos]
                 thumbnail_urls = [
                     f"/photos/thumbnail?path={local.ensure_thumbnail(p).name}" for p in local_photos
                 ]
+                logger.info("Updating DB with %d photo items and thumbnails.", len(photo_items))
                 with get_connection() as conn:
                     conn.execute(
                         """UPDATE listings SET photo_items = ?, thumbnail_urls = ?, updated_at = datetime('now')
                            WHERE id = ?""",
                         (json.dumps(photo_items), json.dumps(thumbnail_urls), listing_id),
                     )
+
+        else:
+            logger.warning("No local photos found for Vinted URL %s", vinted_row["url"])
+    else:
+        logger.debug("No Vinted row for listing %s", listing_id)
 
     # Extract public image URLs / upload local photos to eBay Picture Services (EPS)
     image_urls = []

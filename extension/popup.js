@@ -43,9 +43,14 @@ async function openAndFill(listing) {
   // Stash the listing payload for the content script to pick up once the tab loads.
   // Includes a timestamp so the content script can give up after a while if the
   // user navigates away entirely instead of retrying forever.
-  await chrome.storage.local.set({
-    [`lister_pending_${listing.platform}`]: { ...listing, stashedAt: Date.now() },
-  });
+  try {
+    await chrome.storage.local.set({
+      [`lister_pending_${listing.platform}`]: { ...listing, stashedAt: Date.now() },
+    });
+  } catch (e) {
+    console.error("Storage set failed", e);
+  }
+
   const url = SITE_URLS[listing.platform];
   if (url) {
     chrome.tabs.create({ url });
