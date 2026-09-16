@@ -74,8 +74,14 @@ def relink_all_vinted_photos() -> int:
     return updated
 
 
+
 def _normalize(title: str) -> str:
-    return " ".join(title.lower().split())
+    """Strips punctuation and standardizes whitespace for robust title comparison."""
+    # Remove all characters that are not letters, numbers, or spaces, 
+    # then strip remaining excess whitespace.
+    return re.sub(r'[^\w\s]', '', title).strip().lower()
+
+
 
 
 def _best_match_ratio(title: str, candidates: list[str]) -> float:
