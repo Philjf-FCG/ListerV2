@@ -1,10 +1,12 @@
 import os
+import logging
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.photo_sources import google_photos, local
 from app.schemas import PhotoFilter
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/photos", tags=["photos"])
 
 
@@ -72,7 +74,12 @@ def get_google_thumbnail(media_item_id: str):
     try:
         content, content_type = google_photos.fetch_thumbnail(media_item_id)
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.error("Failed to fetch Google thumbnail for media item %s: %s", media_item_id, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch thumbnail: {exc}") from exc
+    except Exception as exc:
+        # Handle any other unexpected errors gracefully
+        logger.error("Unexpected error fetching Google thumbnail for media item %s: %s", media_item_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error while fetching thumbnail") from exc
     return Response(content=content, media_type=content_type)
 
 

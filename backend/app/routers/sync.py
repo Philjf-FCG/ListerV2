@@ -189,7 +189,7 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
                 img.save(buf, "JPEG", quality=90)
                 images.append(buf.getvalue())
     else:
-        # Fallback: if no local photos, use photo_urls from database (array format)
+        # Fallback: if no local photos, try downloading from Vinted URLs
         photo_data_str = row["photo_urls"]
         if not photo_data_str:
             raise HTTPException(status_code=400, detail="This item has no photos to work from")
@@ -224,48 +224,75 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
                         img.save(buf, "JPEG", quality=90)
                         images.append(buf.getvalue())
                 else:
-                    with httpx.Client(
-                        timeout=30,
-                        follow_redirects=True,
-                        headers={
-                            "Referer": "https://www.vinted.com/",
-                            "User-Agent": (
-                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                "Chrome/125.0.0.0 Safari/537.36"
-                            ),
-                        },
-                    ) as client:
-                        photo_resp = client.get(url)
-                        photo_resp.raise_for_status()
-                        image_bytes = photo_resp.content
-                    images.append(image_bytes)
-                    photo_items_data.append({"source": "url", "ref": url})
-                    thumbnail_urls_data.append(url)
+                    try:
+                        with httpx.Client(
+                            timeout=30,
+                            follow_redirects=True,
+                            headers={
+                                "Referer": "https://www.vinted.com/",
+                                "User-Agent": (
+                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                    "Chrome/125.0.0.0 Safari/537.36"
+                                ),
+                            },
+                        ) as client:
+                            photo_resp = client.get(url)
+                            photo_resp.raise_for_status()
+                            image_bytes = photo_resp.content
+                        images.append(image_bytes)
+                        photo_items_data.append({"source": "url", "ref": url})
+                        thumbnail_urls_data.append(url)
+                    except httpx.HTTPStatusError as exc:
+                        # If we get a 404 or other HTTP error, skip this photo but log it
+                        print(f"Warning: Could not fetch photo {url} (HTTP {exc.response.status_code}): {exc}")
+                        # Continue with other photos instead of failing completely
+                        continue
+                    except Exception as exc:
+                        # For any other error, log and skip this photo
+                        print(f"Warning: Could not fetch/load photo {url}: {exc}")
+                        # Continue with other photos instead of failing completely
+                        continue
             except Exception as exc:
                 # Skip failed photos but continue with others
                 print(f"Warning: Could not fetch/load photo {url}: {exc}")
+                continue
         
+        # If we still have no images after trying both local and Vinted, that's okay - proceed without photos
+        # This allows us to create listings even when photos aren't available
         if not images:
-            raise HTTPException(status_code=400, detail="Could not download any photos from Vinted")
+            print("Warning: No photos were successfully downloaded or found. Creating listing without photos.")
 
     hint = item_hint or f"Originally listed on Vinted as: {row['title']}"
     try:
         copy = generate_listing_copy(images=images, platform="ebay", item_hint=hint, price_hint=row["price"])
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Ollama generation failed: {exc}") from exc
+        # If Ollama fails, log the error and create a basic listing without AI assistance
+        print(f"Warning: Ollama generation failed: {exc}")
+        # Create a basic listing with minimal information instead of failing completely
+        copy = {
+            "title": row["title"] or "No Title",
+            "description": f"Originally listed on Vinted as: {row['title']}",
+            "condition": "Unknown",
+            "tags": "vinted, imported"
+        }
+        # Continue with basic listing creation even if AI fails
 
     # Use Ollama's suggested price or fall back to Vinted price (ensure non-None)
     listing_price = copy.get("suggested_price_gbp") or row["price"] or ""
 
     with get_connection() as conn:
+        # Ensure we have valid data for database insertion
+        photo_items_json = json.dumps(photo_items_data) if photo_items_data else "[]"
+        thumbnail_urls_json = json.dumps(thumbnail_urls_data) if thumbnail_urls_data else "[]"
+        
         cur = conn.execute(
             """INSERT INTO listings
                 (photo_items, thumbnail_urls, platform, title, description, price, condition, tags, status)
                VALUES (?, ?, 'ebay', ?, ?, ?, ?, ?, 'draft_pending')""",
             (
-                json.dumps(photo_items_data),
-                json.dumps(thumbnail_urls_data),
+                photo_items_json,
+                thumbnail_urls_json,
                 copy.get("title"),
                 copy.get("description"),
                 listing_price,
