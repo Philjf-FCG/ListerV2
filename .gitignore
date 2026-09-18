@@ -5,6 +5,8 @@ __pycache__/
 .env
 *.db
 thumbnails/
+vinted_photo_cache/
+vinted_scrape_debug.json
 google_token.json
 ebay_token.json
 node_modules/

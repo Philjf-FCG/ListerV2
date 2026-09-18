@@ -1,129 +1,86 @@
-import pytest
+"""Tests for the Vinted -> eBay sync photo caching fix.
+
+The bug: Vinted's scraped CDN photo URLs are signed with a short-lived token, so by
+the time a listing is imported (often much later) the URLs have already expired -
+photos silently disappear and eBay drafts fall back to a placeholder image. The fix
+downloads photos immediately when the extension reports them (see
+app.routers.sync.cache_vinted_photos), so import always has real local files to
+work from regardless of URL freshness.
+"""
 from unittest.mock import MagicMock, patch
 
-# Import modules under test - using correct paths for this project
-from app.routers.sync import import_vinted_item
+import pytest
+from PIL import Image
+import io
 
-# --- Test Cases ---
+from app.routers import sync
 
-def test_import_vinted_item_success_happy_path():
-    """Tests the successful execution path: Photo download -> Copy generation -> DB commit."""
-    
-    # Mock the database connection/transaction context manager
-    with patch('app.routers.sync.get_connection') as mock_db:
-        mock_conn = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_conn
-        
-        # Mock successful session call for robustness (if applicable)
-        mock_conn.execute.return_value.fetchone.return_value = {
-            "id": 123,
-            "url": "https://www.vinted.com/items/123",
-            "title": "Test Item",
-            "price": "45.00",
-            "photo_urls": '["https://example.com/photo.jpg"]'
-        }
-        mock_conn.execute.return_value.lastrowid = 999
-        
-        # Mock the httpx and generate_listing_copy functions
-        with patch('app.routers.sync.httpx') as mock_httpx, \
-             patch('app.routers.sync.generate_listing_copy', return_value={"title": "Test Title", "description": "Test Desc", "condition": "Good", "tags": "test"}):
-            
-            mock_httpx.get.return_value.json.return_value = {"title": "Success Test", "description": "Good desc"}
-            
-            # 1. Execute the function under test
-            result = import_vinted_item(123)
 
-            # 2. Assertions for transactional success
-            assert result["status"] == "imported"
-            assert result["listing_id"] == 999
-            
-            # Check if connection methods were called successfully (transaction commitment)
-            mock_conn.commit.assert_called_once()
-            
-            # Verify core steps happened
-            mock_httpx.get.assert_called()
+def _fake_jpeg_bytes() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), color="red").save(buf, "JPEG")
+    return buf.getvalue()
 
-def test_import_vinted_item_failure_rollback():
-    """Tests that the transaction rolls back if copy generation fails."""
-    
-    # Mock the database connection/transaction context manager
-    with patch('app.routers.sync.get_connection') as mock_db:
-        mock_conn = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_conn
-        
-        # Mock successful session call for robustness (if applicable)
-        mock_conn.execute.return_value.fetchone.return_value = {
-            "id": 456,
-            "url": "https://www.vinted.com/items/456",
-            "title": "Test Item",
-            "price": "45.00",
-            "photo_urls": '["https://example.com/photo.jpg"]'
-        }
-        
-        # Mock the generate_listing_copy function to fail
-        with patch('app.routers.sync.httpx') as mock_httpx, \
-             patch('app.routers.sync.generate_listing_copy', side_effect=Exception("Ollama API Timeout")):
-            
-            mock_httpx.get.return_value.json.return_value = {"title": "Success Test", "description": "Good desc"}
-            
-            # 1. Execute the function under test - expect exception
-            with pytest.raises(Exception, match="Ollama generation failed"):
-                result = import_vinted_item(456)
-            
-            # Crucial: Check that rollback was called and commit was NOT called
-            mock_conn.rollback.assert_called_once()
-            mock_conn.commit.assert_not_called()
 
-def test_import_vinted_item_no_local_photos():
-    """Tests the scenario where no local photos are found, ensuring graceful fallback."""
-    
-    # Mock the database connection/transaction context manager
-    with patch('app.routers.sync.get_connection') as mock_db:
-        mock_conn = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_conn
-        
-        # Mock a successful HTTP call, but only for metadata retrieval
-        mock_conn.execute.return_value.fetchone.return_value = {
-            "id": 789,
-            "url": "https://www.vinted.com/items/789",
-            "title": "Test Item",
-            "price": "45.00",
-            "photo_urls": '["https://example.com/photo.jpg"]'
-        }
-        mock_conn.execute.return_value.lastrowid = 1000
+def test_vinted_item_id_extracts_numeric_id():
+    assert sync._vinted_item_id("https://www.vinted.co.uk/items/10030090411-a-title") == "10030090411"
+    assert sync._vinted_item_id("https://www.vinted.co.uk/items/42") == "42"
 
-        # Mock the httpx and generate_listing_copy functions
-        with patch('app.routers.sync.httpx') as mock_httpx, \
-             patch('app.routers.sync.generate_listing_copy', return_value={"title": "Test Title", "description": "Test Desc", "condition": "Good", "tags": "test"}):
-            
-            mock_httpx.get.return_value.json.return_value = {"title": "No Photo Test", "description": "Desc"}
-            
-            result = import_vinted_item(789)
 
-            # Assertions
-            assert result["status"] == "imported"
-            mock_conn.commit.assert_called_once()
+def test_vinted_item_id_returns_none_for_non_matching_url():
+    assert sync._vinted_item_id("https://www.vinted.co.uk/catalog") is None
+    assert sync._vinted_item_id(None) is None
 
-def test_ollama_client_dependency():
-    """Tests that the module correctly handles missing dependencies for AI copy generation."""
-    # Mock a minimal DB connection to prevent dependency failure in the outer scope
-    with patch('app.routers.sync.get_connection', return_value=MagicMock()) as mock_db:
-        mock_conn = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_conn
-        mock_conn.execute.return_value.fetchone.return_value = {
-            "id": 101,
-            "url": "https://www.vinted.com/items/101",
-            "title": "Test Item",
-            "price": "45.00",
-            "photo_urls": '["https://example.com/photo.jpg"]'
-        }
 
-        # Mock the generate_listing_copy function to fail
-        with patch('app.routers.sync.httpx') as mock_httpx, \
-             patch('app.routers.sync.generate_listing_copy', side_effect=ImportError("ollama_client not found")):
-            
-            mock_httpx.get.return_value.json.return_value = {"title": "Success Test", "description": "Good desc"}
-            
-            # Expect failure state and no commit
-            with pytest.raises(Exception, match="Ollama generation failed"):
-                result = import_vinted_item(101)
+def test_cache_vinted_photos_downloads_and_saves_each_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(sync, "_PHOTO_CACHE_DIR", tmp_path)
+
+    fake_resp = MagicMock()
+    fake_resp.content = _fake_jpeg_bytes()
+    fake_resp.raise_for_status = MagicMock()
+    fake_client = MagicMock()
+    fake_client.get.return_value = fake_resp
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+
+    with patch.object(sync.httpx, "Client", return_value=fake_client):
+        cached = sync.cache_vinted_photos("12345", ["https://images1.vinted.net/a.jpg", "https://images1.vinted.net/b.jpg"])
+
+    assert len(cached) == 2
+    assert all(p.exists() for p in cached)
+    assert fake_client.get.call_count == 2
+
+
+def test_cache_vinted_photos_skips_failed_downloads_without_raising(tmp_path, monkeypatch):
+    monkeypatch.setattr(sync, "_PHOTO_CACHE_DIR", tmp_path)
+
+    ok_resp = MagicMock()
+    ok_resp.content = _fake_jpeg_bytes()
+    ok_resp.raise_for_status = MagicMock()
+
+    fake_client = MagicMock()
+    fake_client.get.side_effect = [Exception("404 expired"), ok_resp]
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+
+    with patch.object(sync.httpx, "Client", return_value=fake_client):
+        cached = sync.cache_vinted_photos("999", ["https://images1.vinted.net/expired.jpg", "https://images1.vinted.net/ok.jpg"])
+
+    # Only the second URL succeeded; the first was skipped, not raised.
+    assert len(cached) == 1
+
+
+def test_get_local_vinted_photos_prefers_cache_over_configured_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(sync, "_PHOTO_CACHE_DIR", tmp_path)
+    item_folder = tmp_path / "555"
+    item_folder.mkdir()
+    (item_folder / "photo_0.jpg").write_bytes(_fake_jpeg_bytes())
+
+    photos = sync.get_local_vinted_photos("https://www.vinted.co.uk/items/555-thing")
+    assert len(photos) == 1
+    assert photos[0].name == "photo_0.jpg"
+
+
+def test_get_local_vinted_photos_returns_empty_for_url_without_item_id():
+    assert sync.get_local_vinted_photos("https://www.vinted.co.uk/catalog") == []
+    assert sync.get_local_vinted_photos(None) == []

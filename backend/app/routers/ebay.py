@@ -16,10 +16,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ebay", tags=["ebay"])
 
-logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/ebay", tags=["ebay"])
-
 # Placeholder photo for eBay listings when no photos are available
 PLACEHOLDER_PHOTO_PATH = Path(__file__).parent.parent / "static" / "placeholder_photo.jpg"
 
@@ -55,7 +51,7 @@ def _ensure_placeholder_photo_exists():
 
 @router.get("/status")
 def ebay_status():
-    return {"connected": is_connected()}
+    return {"connected": ebay_client.is_connected()}
 
 
 @router.get("/category-suggestions")
@@ -169,24 +165,34 @@ def push_listing_to_ebay(listing_id: int, category_id: str):
     if row["platform"] != "ebay":
         raise HTTPException(status_code=400, detail="This listing isn't targeted at eBay")
 
-    # Check if there are local photos available directly or via linked Vinted item
+    # The eBay SKU is generated once and persisted - never derived from this row's
+    # local id (see ebay_client.generate_ebay_sku for why that used to be unsafe).
+    sku = row["ebay_sku"]
+    if not sku:
+        sku = ebay_client.generate_ebay_sku()
+        with get_connection() as conn:
+            conn.execute("UPDATE listings SET ebay_sku = ? WHERE id = ?", (sku, listing_id))
+
     photo_items = json.loads(row["photo_items"] or "[]")
-    
-    # If the listing only has a single remote URL, check if local photos exist for this Vinted item
-    if not any(item.get("source") == "local" for item in photo_items):
+
+    # Listings imported from the Vinted sync feature (section 3) sometimes predate
+    # the local photo cache, or had it cleared - top up from the Vinted item's
+    # cached photos (see sync.get_local_vinted_photos) if we're otherwise empty-handed.
+    if not photo_items:
         with get_connection() as conn:
             vinted_row = conn.execute(
                 "SELECT url FROM vinted_items WHERE imported_listing_id = ?", (listing_id,)
             ).fetchone()
         if vinted_row:
-            logger.info("Vinted row found for listing %s: %s", listing_id, vinted_row["url"])
-            # For now, we'll skip the local photo check since we don't have get_local_vinted_photos function
-            # This will be handled in the main push logic which checks the DB directly
-            logger.info("Skipping Vinted photo import - get_local_vinted_photos function not available")
-        else:
-            logger.warning("No local photos found for Vinted URL %s", vinted_row["url"] if 'vinted_row' in locals() else "Unknown")
-    else:
-        logger.debug("No Vinted row for listing %s", listing_id)
+            from app.routers.sync import get_local_vinted_photos
+
+            local_photos = get_local_vinted_photos(vinted_row["url"])
+            if local_photos:
+                logger.info(
+                    "Listing %s had no photo_items - found %d cached Vinted photo(s) via %s",
+                    listing_id, len(local_photos), vinted_row["url"],
+                )
+                photo_items = [{"source": "local", "ref": str(p)} for p in local_photos]
 
     # Extract public image URLs / upload local photos to eBay Picture Services (EPS)
     image_urls = []
@@ -207,15 +213,18 @@ def push_listing_to_ebay(listing_id: int, category_id: str):
             if g_url:
                 image_urls.append(g_url)
 
-    # If no images were successfully uploaded, add a placeholder photo
+    # If no images were successfully uploaded, fall back to a visible placeholder
+    # so the push still completes - but flag it clearly (see used_placeholder below)
+    # so the listing card warns the user rather than silently shipping a fake photo.
+    used_placeholder = False
     if not image_urls and PLACEHOLDER_PHOTO_PATH.exists():
         try:
-            logger.info("Adding placeholder photo as no photos available for listing %s", listing_id)
+            logger.warning("No real photos available for listing %s - using placeholder", listing_id)
             eps_url = ebay_client.upload_picture_to_ebay(PLACEHOLDER_PHOTO_PATH)
             image_urls.append(eps_url)
+            used_placeholder = True
         except Exception as exc:  # noqa: BLE001
             logger.error("Could not upload placeholder photo to eBay EPS: %s", exc)
-            # If we can't upload the placeholder, continue without any photos but log it
             logger.warning("No photos available for listing %s (including placeholder)", listing_id)
 
     title = row["title"] or ""
@@ -233,7 +242,11 @@ def push_listing_to_ebay(listing_id: int, category_id: str):
         # Continue without aspects - this is not critical for listing creation
         pass
 
-    sku = f"lister-{listing_id}"
+    # eBay requires a package weight/size on the offer for carriers that price
+    # shipping by parcel size (see create_offer) - reuse the same "Package Size"
+    # text heuristic used for the item aspect above, just mapped to small/medium/large.
+    package_size_hint = _infer_aspect_value("Package Size", title, desc, tags)[0].split()[0].lower()
+
     try:
         ebay_client.create_or_replace_inventory_item(
             sku=sku,
@@ -244,7 +257,9 @@ def push_listing_to_ebay(listing_id: int, category_id: str):
             image_urls=image_urls if image_urls else None,
             aspects=aspects if aspects else None,
         )
-        offer = ebay_client.create_offer(sku=sku, category_id=category_id, price=row["price"] or "")
+        offer = ebay_client.create_offer(
+            sku=sku, category_id=category_id, price=row["price"] or "", package_size_hint=package_size_hint
+        )
     except Exception as exc:  # noqa: BLE001
         # Log the specific error for debugging
         logger.error("eBay API error during push: %s", exc)
@@ -264,19 +279,28 @@ def push_listing_to_ebay(listing_id: int, category_id: str):
         raise HTTPException(status_code=502, detail=f"eBay API error: {exc}") from exc
 
     offer_id = offer.get("offerId")
+    error_note = f"offer_id:{offer_id}"
+    if used_placeholder:
+        error_note += ";no_real_photos"
     with get_connection() as conn:
         conn.execute(
             """UPDATE listings SET status = 'posted_as_draft', error = ?, updated_at = datetime('now')
                WHERE id = ?""",
-            (f"offer_id:{offer_id}", listing_id),
+            (error_note, listing_id),
         )
-    return {"status": "draft_created", "offerId": offer_id, "sku": sku}
+    return {"status": "draft_created", "offerId": offer_id, "sku": sku, "usedPlaceholderPhoto": used_placeholder}
 
 
 @router.post("/listings/{listing_id}/publish")
 def publish_listing_to_ebay(listing_id: int):
     """Publishes an existing inventory draft offer straight to live eBay with 1 click!"""
-    sku = f"lister-{listing_id}"
+    with get_connection() as conn:
+        row = conn.execute("SELECT ebay_sku FROM listings WHERE id = ?", (listing_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    sku = row["ebay_sku"]
+    if not sku:
+        raise HTTPException(status_code=400, detail="No eBay offer found for this listing. Push to eBay first.")
     try:
         # Find offer ID associated with SKU
         headers = ebay_client._user_auth_header()

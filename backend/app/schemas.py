@@ -82,3 +82,4 @@ class VintedItemOut(BaseModel):
     imported_listing_id: int | None
     scraped_at: str
     on_ebay: bool = False
+    thumbnail_url: str | None = None  # cached local thumbnail when available, else falls back to photo_urls[0]

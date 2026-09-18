@@ -23,6 +23,7 @@ import io
 import json
 import re
 import time as time_mod
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -47,6 +48,17 @@ _PENDING_STATES: set[str] = set()
 
 _app_token_cache: dict = {}
 _eps_cache: dict[str, str] = {}
+
+
+def generate_ebay_sku() -> str:
+    """A new SKU that's safe to use forever - unlike the old f"lister-{row_id}"
+    scheme, this is never derived from the local SQLite row id, so it can never
+    collide with a real listing from a previous life of the local database (row
+    ids get reused after any DB reset, which happened more than once during this
+    project's history and silently aimed pushes at unrelated live eBay listings).
+    Callers must persist this on the listing row and reuse it on every retry -
+    never call this more than once per listing."""
+    return f"lister-{uuid.uuid4().hex[:12]}"
 
 
 def _basic_auth_header() -> dict:
@@ -113,7 +125,10 @@ def _refresh_user_token(data: dict) -> dict:
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": data["refresh_token"],
-                "scope": "%20".join(_USER_SCOPES),
+                # httpx form-encodes dict values itself - a pre-escaped "%20" here gets
+                # double-encoded into "%2520", which eBay rejects as invalid_scope. Use a
+                # real space (like build_auth_url does) and let httpx encode it once.
+                "scope": " ".join(_USER_SCOPES),
             },
         )
         _raise_with_ebay_detail(resp)
@@ -149,7 +164,7 @@ def _app_access_token() -> str:
         resp = client.post(
             _TOKEN_URL,
             headers={**_basic_auth_header(), "Content-Type": "application/x-www-form-urlencoded"},
-            data={"grant_type": "client_credentials", "scope": "%20".join(_APP_SCOPES)},
+            data={"grant_type": "client_credentials", "scope": " ".join(_APP_SCOPES)},
         )
         _raise_with_ebay_detail(resp)
         data = resp.json()
@@ -499,7 +514,31 @@ def create_or_replace_inventory_item(
         _raise_with_ebay_detail(resp)
 
 
-def create_offer(sku: str, category_id: str, price: str) -> dict:
+# eBay rejects offer creation with errorId 25002 ("select the package size that
+# best fits your item") whenever the account's fulfillment policy includes a
+# carrier/service that needs to know package type + weight + dimensions to price
+# shipping (e.g. Royal Mail parcel services) and the offer doesn't provide one.
+# We don't know the real physical size, so pick a rough preset from a size hint
+# (see ebay.py's package-size guess) - good enough to get the draft created; the
+# user can correct the real weight/dimensions on eBay's site before publishing.
+_PACKAGE_PRESETS = {
+    "small": {"weight_kg": 0.3, "dims_cm": (25.0, 20.0, 3.0)},
+    "medium": {"weight_kg": 1.0, "dims_cm": (35.0, 25.0, 10.0)},
+    "large": {"weight_kg": 3.0, "dims_cm": (45.0, 35.0, 20.0)},
+}
+
+
+def _package_weight_and_size(size_hint: str | None) -> dict:
+    preset = _PACKAGE_PRESETS.get((size_hint or "medium").lower(), _PACKAGE_PRESETS["medium"])
+    length, width, height = preset["dims_cm"]
+    return {
+        "packageType": "PARCEL_OR_PADDED_ENVELOPE",
+        "weight": {"value": preset["weight_kg"], "unit": "KILOGRAM"},
+        "dimensions": {"length": length, "width": width, "height": height, "unit": "CENTIMETER"},
+    }
+
+
+def create_offer(sku: str, category_id: str, price: str, package_size_hint: str | None = None) -> dict:
     settings = get_settings()
     location_key = get_or_create_merchant_location()
     policies = get_business_policy_ids()
@@ -520,6 +559,7 @@ def create_offer(sku: str, category_id: str, price: str) -> dict:
         "pricingSummary": {
             "price": {"value": clean_price_val, "currency": "GBP"},
         },
+        "packageWeightAndSize": _package_weight_and_size(package_size_hint),
     }
 
     with httpx.Client() as client:

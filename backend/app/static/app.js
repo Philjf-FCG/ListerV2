@@ -243,9 +243,11 @@ async function loadListings() {
         const itemId = listing.error.split(":")[1];
         nextStepHtml = `<div class="meta status-reviewed_ready"><strong>Live on eBay!</strong> <a href="https://www.ebay.co.uk/itm/${itemId}" target="_blank">View Item ${itemId} on eBay</a></div>`;
       } else {
+        const noRealPhotos = listing.error && listing.error.includes("no_real_photos");
         nextStepHtml = `<div class="meta status-posted_as_draft">
           <strong>Draft offer created on eBay!</strong><br/>
           <small>(Note: eBay's website only shows web-wizard drafts under "Seller Hub > Drafts", but your item is safely saved in eBay's Inventory DB).</small><br/>
+          ${noRealPhotos ? '<div class="meta status-failed">No real photos were found for this item - a placeholder image was uploaded instead. Add real photos on eBay before publishing.</div>' : ""}
           <button class="publish-ebay-btn" style="margin-top: 6px;">Publish to Live eBay Now</button>
         </div>`;
       }
@@ -400,7 +402,7 @@ function renderSyncList(items) {
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
-      ${item.photo_urls && item.photo_urls.length > 0 ? `<img src="${item.photo_urls[0]}" alt="thumb" />` : ""}
+      ${item.thumbnail_url ? `<img src="${item.thumbnail_url}" alt="thumb" />` : ""}
       <div class="meta">${item.title}</div>
       <div class="meta">£${item.price ?? "?"}</div>
       <button class="import-btn">Generate eBay draft copy from this</button>

@@ -118,6 +118,24 @@ def _migrate_vinted_items_photo_urls(conn: sqlite3.Connection) -> None:
     # Old column kept for backward compat during transition
 
 
+def _migrate_ebay_sku_column(conn: sqlite3.Connection) -> None:
+    """Adds ebay_sku and backfills it for listings that were already pushed under
+    the old id-derived scheme (sku = f"lister-{row id}"). That old scheme is unsafe
+    going forward (row ids get reused whenever the local DB is reset, colliding with
+    a real, unrelated eBay listing that happens to have used the same id) - see
+    ebay_client.generate_ebay_sku. Only backfill rows we know for certain already
+    have a live/draft offer under the old SKU (error starts with offer_id:/published:);
+    anything else gets a fresh safe SKU the next time it's pushed."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(listings)").fetchall()}
+    if "ebay_sku" in columns:
+        return
+    conn.execute("ALTER TABLE listings ADD COLUMN ebay_sku TEXT")
+    conn.execute(
+        """UPDATE listings SET ebay_sku = 'lister-' || id
+           WHERE platform = 'ebay' AND (error LIKE 'offer_id:%' OR error LIKE 'published:%')"""
+    )
+
+
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(_SCHEMA)
@@ -128,6 +146,7 @@ def init_db() -> None:
             conn.execute("ALTER TABLE listings ADD COLUMN thumbnail_urls TEXT")
         _migrate_legacy_single_photo_columns(conn)
         _migrate_vinted_items_photo_urls(conn)
+        _migrate_ebay_sku_column(conn)
 
 
 @contextmanager

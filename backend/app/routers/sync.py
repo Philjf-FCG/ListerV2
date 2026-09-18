@@ -3,10 +3,19 @@ has no API) against their live eBay listings (via eBay's Trading API), and lets
 the user import anything missing on eBay straight into Lister's normal review
 pipeline - it becomes a regular draft_pending listing, same as photo-sourced ones,
 so it still goes through Ollama copy generation and human review before posting.
+
+Photo handling: Vinted's CDN photo URLs are signed with a short-lived token, so by
+the time a user comes back to "import" an item (minutes to days after scraping) the
+scraped URLs have usually already expired (observed 404s within the same day). We
+therefore download and cache every photo locally the moment the extension reports
+it in upsert_vinted_items() below, rather than waiting until import time - that's
+the fix for photos silently going missing (and eBay drafts ending up with the
+placeholder image) on the Vinted -> eBay sync path.
 """
 import difflib
 import io
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -15,25 +24,78 @@ from fastapi import APIRouter, HTTPException
 from PIL import Image
 
 from app import ebay_client
-from app.config import get_settings
+from app.config import BACKEND_DIR, get_settings
 from app.db import get_connection
 from app.ollama_client import generate_listing_copy
 from app.photo_sources import local
 from app.schemas import VintedItemIn, VintedItemOut
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/sync", tags=["sync"])
 
 _MATCH_THRESHOLD = 0.6
+_VALID_PHOTO_EXTS = {".webp", ".jpg", ".jpeg", ".png", ".heic"}
+_PHOTO_CACHE_DIR = BACKEND_DIR / "vinted_photo_cache"
+_PHOTO_FETCH_HEADERS = {
+    "Referer": "https://www.vinted.com/",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def _vinted_item_id(vinted_url: str | None) -> str | None:
+    if not vinted_url:
+        return None
+    m = re.search(r"/items/(\d+)", vinted_url)
+    return m.group(1) if m else None
+
+
+def cache_vinted_photos(item_id: str, photo_urls: list[str]) -> list[Path]:
+    """Downloads each photo URL right now (while the signed CDN link is still fresh)
+    and saves it under _PHOTO_CACHE_DIR/<item_id>/. Safe to call repeatedly - it
+    re-fetches every time so the cache stays in sync if the Vinted photos changed,
+    and a failure on one photo doesn't stop the others from being cached."""
+    if not photo_urls:
+        return []
+    folder = _PHOTO_CACHE_DIR / item_id
+    folder.mkdir(parents=True, exist_ok=True)
+    cached: list[Path] = []
+    with httpx.Client(timeout=20, follow_redirects=True, headers=_PHOTO_FETCH_HEADERS) as client:
+        for i, url in enumerate(photo_urls):
+            dest = folder / f"photo_{i}.jpg"
+            try:
+                resp = client.get(url)
+                resp.raise_for_status()
+                with Image.open(io.BytesIO(resp.content)) as img:
+                    img = img.convert("RGB")
+                    img.save(dest, "JPEG", quality=90)
+                cached.append(dest)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Couldn't cache Vinted photo %s for item %s: %s", url, item_id, exc)
+    return cached
 
 
 def get_local_vinted_photos(vinted_url: str | None) -> list[Path]:
-    """Finds all photos for a Vinted listing in the local directory structure."""
-    if not vinted_url:
+    """Finds all photos for a Vinted listing: first in the auto-downloaded cache
+    (populated by cache_vinted_photos at sync time), then falling back to the
+    manually-configured VINTED_PHOTOS_DIR for anyone who prefers to place their own
+    higher-resolution exports there."""
+    item_id = _vinted_item_id(vinted_url)
+    if not item_id:
         return []
-    m = re.search(r"/items/(\d+)", vinted_url)
-    if not m:
-        return []
-    item_id = m.group(1)
+
+    cache_folder = _PHOTO_CACHE_DIR / item_id
+    if cache_folder.is_dir():
+        cached = sorted(
+            (p for p in cache_folder.iterdir() if p.is_file() and p.suffix.lower() in _VALID_PHOTO_EXTS),
+            key=lambda p: p.name,
+        )
+        if cached:
+            return cached
+
     settings = get_settings()
     if not settings.vinted_photos_dir:
         return []
@@ -41,9 +103,10 @@ def get_local_vinted_photos(vinted_url: str | None) -> list[Path]:
     if not folder.exists() or not folder.is_dir():
         return []
 
-    valid_exts = {".webp", ".jpg", ".jpeg", ".png", ".heic"}
-    photos = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in valid_exts]
-    return sorted(photos, key=lambda p: p.name)
+    return sorted(
+        (p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _VALID_PHOTO_EXTS),
+        key=lambda p: p.name,
+    )
 
 
 def relink_all_vinted_photos() -> int:
@@ -93,29 +156,21 @@ def _best_match_ratio(title: str, candidates: list[str]) -> float:
 
 @router.post("/vinted/items")
 def upsert_vinted_items(items: list[VintedItemIn]):
-    """Extension posts whatever it scraped from the Vinted listings page here."""
-    # Debug: Log items received
-    import json as _json
-    with open("vinted_scrape_debug.json", "w") as f:
-        _json.dump([dict(item) for item in items], f, indent=2)
-    
+    """Extension posts whatever it scraped from the Vinted listings page here.
+    Photos are downloaded and cached to disk immediately, while the scraped CDN
+    URLs are still fresh - see cache_vinted_photos()."""
+    logger.info("Received %d scraped Vinted item(s)", len(items))
+
     with get_connection() as conn:
         for item in items:
             # Handle both photo_url (single, backward compat) and photo_urls (array)
-            photo_data = None
-            if item.photo_urls is not None:
-                # Only save non-empty arrays
-                if len(item.photo_urls) > 0:
-                    photo_data = json.dumps(item.photo_urls)
-            elif item.photo_url is not None:
-                # Backward compatibility: convert single photo_url to array format
-                photo_data = json.dumps([item.photo_url])
+            photo_urls = item.photo_urls or ([item.photo_url] if item.photo_url else [])
+            photo_data = json.dumps(photo_urls) if photo_urls else None
 
             # Fallback: try to extract price from title if not provided
             price = item.price
             if not price:
-                import re as _re
-                price_match = _re.search(r'[£$€]\s?(\d+[.,]?\d*)', item.title)
+                price_match = re.search(r"[£$€]\s?(\d+[.,]?\d*)", item.title)
                 if price_match:
                     price = price_match.group(1)
 
@@ -126,6 +181,12 @@ def upsert_vinted_items(items: list[VintedItemIn]):
                         price = excluded.price, photo_urls = excluded.photo_urls""",
                 (item.url, item.title, price, photo_data),
             )
+
+            item_id = _vinted_item_id(item.url)
+            if item_id and photo_urls:
+                cached = cache_vinted_photos(item_id, photo_urls)
+                logger.info("Cached %d/%d photo(s) for Vinted item %s", len(cached), len(photo_urls), item_id)
+
     return {"status": "ok", "count": len(items)}
 
 
@@ -155,7 +216,17 @@ def list_vinted_items(check_ebay: bool = True, skip_ebay_check: bool = False):
         on_ebay = bool(data["imported_listing_id"]) or (
             bool(ebay_titles) and _best_match_ratio(data["title"], ebay_titles) >= _MATCH_THRESHOLD
         )
-        results.append(VintedItemOut(**data, on_ebay=on_ebay))
+
+        # Prefer a thumbnail served from our own cache - Vinted's scraped CDN URL is
+        # signed and short-lived, so it 404s if the user looks at this list later.
+        thumbnail_url = None
+        cached_photos = get_local_vinted_photos(data["url"])
+        if cached_photos:
+            thumbnail_url = f"/photos/thumbnail?path={local.ensure_thumbnail(cached_photos[0]).name}"
+        elif data.get("photo_urls"):
+            thumbnail_url = data["photo_urls"][0]
+
+        results.append(VintedItemOut(**data, on_ebay=on_ebay, thumbnail_url=thumbnail_url))
     return results
 
 
