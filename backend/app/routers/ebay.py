@@ -1,6 +1,7 @@
 import json
 import logging
 import mimetypes
+import re
 from pathlib import Path
 
 import httpx
@@ -62,9 +63,43 @@ def category_suggestions(q: str):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-def _infer_aspect_value(aspect_name: str, title: str, desc: str, tags: str) -> list[str]:
+def _infer_aspect_value(
+    aspect_name: str,
+    title: str,
+    desc: str,
+    tags: str,
+    mode: str = "FREE_TEXT",
+    values: list[str] | None = None,
+) -> list[str]:
     combined = f"{title} {desc} {tags}".lower()
     name_lower = aspect_name.lower()
+
+    # Aspects with a standard-values list (SELECTION_ONLY, or FREE_TEXT aspects
+    # whose mode the Taxonomy API mislabels - e.g. "UK Shoe Size" reports
+    # FREE_TEXT here but the Inventory API rejects any value outside this list
+    # regardless) should always prefer one of eBay's own values over a guessed
+    # string, so scan the listing text for one instead. Longest values first so
+    # "6.5" wins over "6".
+    if values:
+        for val in sorted(values, key=len, reverse=True):
+            val_lower = val.lower()
+            if re.fullmatch(r"\d+(\.\d+)?", val_lower):
+                # Purely numeric values (shoe sizes etc.) are as often glued to a
+                # letter prefix in titles ("UK9", "EU43") as space-separated ("UK
+                # 9") - boundary is "not digit/dot" so it still matches inside
+                # "uk9", while still refusing to grab "3" out of "13" or "6" out
+                # of "6.5".
+                pattern = rf"(?<![\d.]){re.escape(val_lower)}(?![\d.])"
+            else:
+                # Alphabetic values (brand, colour, ...) need real word
+                # boundaries - the loose numeric rule would let a short value
+                # like the brand "ara" match inside an unrelated word like
+                # "character".
+                pattern = rf"(?<!\w){re.escape(val_lower)}(?!\w)"
+            if re.search(pattern, combined):
+                return [val]
+        if mode == "SELECTION_ONLY":
+            return [values[0]]
 
     if "brand" in name_lower:
         for brand in [
@@ -236,7 +271,9 @@ def push_listing_to_ebay(listing_id: int, category_id: str):
     try:
         req_aspects = ebay_client.get_category_required_aspects(category_id)
         for req in req_aspects:
-            aspects[req] = _infer_aspect_value(req, title, desc, tags)
+            aspects[req["name"]] = _infer_aspect_value(
+                req["name"], title, desc, tags, req["mode"], req["values"]
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not fetch category aspects for %s: %s", category_id, exc)
         # Continue without aspects - this is not critical for listing creation

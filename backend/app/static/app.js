@@ -4,6 +4,8 @@ const scanBtn = document.getElementById("scan-btn");
 const generateBar = document.getElementById("generate-bar");
 const generateCountLabel = document.getElementById("generate-count-label");
 const syncList = document.getElementById("sync-list");
+const ageReportList = document.getElementById("age-report-list");
+const VINTED_AGE_THRESHOLD_DAYS = 14;
 
 let activePollTimer = null;
 const selectedPhotos = new Map(); // key: `${source}:${ref}` -> PhotoItem
@@ -229,6 +231,13 @@ async function loadListings() {
       .join("");
     let nextStepHtml = "";
     let statusErrorHtml = "";
+    // The backend only tracks "posted_as_draft" in the status column for both the
+    // unpublished eBay draft and the fully live listing (see publish_listing_to_ebay
+    // in routers/ebay.py) - it distinguishes the two via the "published:" prefix on
+    // error instead, so the top badge needs the same check or it never stops saying
+    // "posted_as_draft" once an item goes live.
+    const isLivePublished = listing.status === "posted_as_draft" && listing.error && listing.error.startsWith("published:");
+    const displayStatus = isLivePublished ? "published" : listing.status;
 
     if (listing.status === "reviewed_ready") {
       nextStepHtml = listing.platform === "ebay"
@@ -257,7 +266,7 @@ async function loadListings() {
 
     card.innerHTML = `
       <span class="platform-badge">${listing.platform}</span>
-      <span class="status-${listing.status}"> ${listing.status}</span>
+      <span class="status-${displayStatus}"> ${displayStatus}</span>
       <div class="thumb-row">${thumbsHtml}</div>
       <input type="text" class="title" value="${listing.title ?? ""}" placeholder="title" />
       <textarea class="description">${listing.description ?? ""}</textarea>
@@ -375,13 +384,17 @@ async function deleteListing(id) {
   await loadListings();
 }
 
+let lastSyncedVintedItems = []; // cache so dismissing one item doesn't need a full re-check
+
 async function loadSyncList() {
   syncList.innerHTML = '<p class="meta">Checking against your live eBay listings...</p>';
   try {
     const res = await fetch("/sync/vinted/items");
     if (!res.ok) throw new Error(`backend returned ${res.status}: ${await res.text()}`);
     const items = await res.json();
+    lastSyncedVintedItems = items;
     renderSyncList(items);
+    renderAgeReport(items);
   } catch (err) {
     syncList.innerHTML = `<p class="meta status-failed">Couldn't check eBay listings: ${err}</p>`;
   }
@@ -406,9 +419,61 @@ function renderSyncList(items) {
       <div class="meta">${item.title}</div>
       <div class="meta">£${item.price ?? "?"}</div>
       <button class="import-btn">Generate eBay draft copy from this</button>
+      <button class="delete-vinted-btn">Remove from this list</button>
     `;
     card.querySelector(".import-btn").addEventListener("click", (e) => importVintedItem(item.id, e.target));
+    card.querySelector(".delete-vinted-btn").addEventListener("click", () => dismissVintedItem(item.id));
     syncList.appendChild(card);
+  }
+}
+
+function _vintedItemAgeDays(scrapedAt) {
+  // scraped_at is stored via SQLite's datetime('now') - "YYYY-MM-DD HH:MM:SS", UTC,
+  // no timezone marker - needs both an ISO separator and an explicit Z or JS parses
+  // it as local time (or rejects it outright in some browsers).
+  const scraped = new Date(scrapedAt.replace(" ", "T") + "Z");
+  return Math.floor((Date.now() - scraped.getTime()) / 86400000);
+}
+
+function renderAgeReport(items) {
+  ageReportList.innerHTML = "";
+  const old = items
+    .map((item) => ({ ...item, ageDays: _vintedItemAgeDays(item.scraped_at) }))
+    .filter((item) => item.ageDays >= VINTED_AGE_THRESHOLD_DAYS)
+    .sort((a, b) => b.ageDays - a.ageDays);
+
+  if (!old.length) {
+    ageReportList.innerHTML = '<p class="meta status-reviewed_ready">Nothing synced more than 2 weeks ago.</p>';
+    return;
+  }
+  for (const item of old) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      ${item.thumbnail_url ? `<img src="${item.thumbnail_url}" alt="thumb" />` : ""}
+      <div class="meta">${item.title}</div>
+      <div class="meta">£${item.price ?? "?"}</div>
+      <div class="meta status-failed">${item.ageDays} days old${item.on_ebay ? " · already matched on eBay" : ""}</div>
+      <a class="meta" href="${item.url}" target="_blank" rel="noopener">View on Vinted</a>
+      <button class="delete-vinted-btn">Remove from this list</button>
+    `;
+    card.querySelector(".delete-vinted-btn").addEventListener("click", () => dismissVintedItem(item.id));
+    ageReportList.appendChild(card);
+  }
+}
+
+async function dismissVintedItem(vintedItemId) {
+  try {
+    const res = await fetch(`/sync/vinted/${vintedItemId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`backend returned ${res.status}: ${await res.text()}`);
+    // Update from the already-fetched list instead of reloading (loadSyncList
+    // re-checks every item against live eBay listings, which takes 10-15s+ with a
+    // few hundred synced items - too slow to pay on every single dismiss).
+    lastSyncedVintedItems = lastSyncedVintedItems.filter((i) => i.id !== vintedItemId);
+    renderSyncList(lastSyncedVintedItems);
+    renderAgeReport(lastSyncedVintedItems);
+  } catch (err) {
+    alert(`Couldn't remove this item: ${err}`);
   }
 }
 

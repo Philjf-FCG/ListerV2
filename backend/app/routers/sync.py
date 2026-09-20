@@ -78,35 +78,34 @@ def cache_vinted_photos(item_id: str, photo_urls: list[str]) -> list[Path]:
     return cached
 
 
-def get_local_vinted_photos(vinted_url: str | None) -> list[Path]:
-    """Finds all photos for a Vinted listing: first in the auto-downloaded cache
-    (populated by cache_vinted_photos at sync time), then falling back to the
-    manually-configured VINTED_PHOTOS_DIR for anyone who prefers to place their own
-    higher-resolution exports there."""
-    item_id = _vinted_item_id(vinted_url)
-    if not item_id:
+def _photos_in(folder: Path) -> list[Path]:
+    if not folder.is_dir():
         return []
-
-    cache_folder = _PHOTO_CACHE_DIR / item_id
-    if cache_folder.is_dir():
-        cached = sorted(
-            (p for p in cache_folder.iterdir() if p.is_file() and p.suffix.lower() in _VALID_PHOTO_EXTS),
-            key=lambda p: p.name,
-        )
-        if cached:
-            return cached
-
-    settings = get_settings()
-    if not settings.vinted_photos_dir:
-        return []
-    folder = Path(settings.vinted_photos_dir) / item_id
-    if not folder.exists() or not folder.is_dir():
-        return []
-
     return sorted(
         (p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _VALID_PHOTO_EXTS),
         key=lambda p: p.name,
     )
+
+
+def get_local_vinted_photos(vinted_url: str | None) -> list[Path]:
+    """Finds all photos for a Vinted listing: first in VINTED_PHOTOS_DIR (real,
+    full-resolution photos from your Vinted GDPR data export - vinted.co.uk >
+    Account Settings > Download your data), then falling back to the
+    auto-downloaded CDN cache (populated by cache_vinted_photos at sync time) for
+    anything too recent to be in your last export yet. The export wins when both
+    have the item since the extension's scraped CDN thumbnails are small
+    (~310x430) and signed with a short-lived token."""
+    item_id = _vinted_item_id(vinted_url)
+    if not item_id:
+        return []
+
+    settings = get_settings()
+    if settings.vinted_photos_dir:
+        exported = _photos_in(Path(settings.vinted_photos_dir) / item_id)
+        if exported:
+            return exported
+
+    return _photos_in(_PHOTO_CACHE_DIR / item_id)
 
 
 def relink_all_vinted_photos() -> int:
@@ -193,7 +192,9 @@ def upsert_vinted_items(items: list[VintedItemIn]):
 @router.get("/vinted/items", response_model=list[VintedItemOut])
 def list_vinted_items(check_ebay: bool = True, skip_ebay_check: bool = False):
     with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM vinted_items ORDER BY scraped_at DESC").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM vinted_items WHERE dismissed = 0 ORDER BY scraped_at DESC"
+        ).fetchall()
 
     ebay_titles: list[str] = []
     if check_ebay and rows and not skip_ebay_check and ebay_client.is_connected():
@@ -228,6 +229,18 @@ def list_vinted_items(check_ebay: bool = True, skip_ebay_check: bool = False):
 
         results.append(VintedItemOut(**data, on_ebay=on_ebay, thumbnail_url=thumbnail_url))
     return results
+
+
+@router.delete("/vinted/{vinted_item_id}")
+def delete_vinted_item(vinted_item_id: int):
+    """Hides a Vinted item from the sync list / age report - doesn't touch anything
+    on Vinted or eBay, even if it was already imported into a listing (that listing
+    is left as-is). This is a soft delete (dismissed = 1), not a row DELETE: a hard
+    delete would just reappear next time the extension re-scrapes this same Vinted
+    item, since upsert_vinted_items re-inserts any URL it doesn't already have."""
+    with get_connection() as conn:
+        conn.execute("UPDATE vinted_items SET dismissed = 1 WHERE id = ?", (vinted_item_id,))
+    return {"status": "dismissed"}
 
 
 @router.post("/vinted/relink-photos")
@@ -265,7 +278,6 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
         if not photo_data_str:
             raise HTTPException(status_code=400, detail="This item has no photos to work from")
         
-        import json
         try:
             photo_urls = json.loads(photo_data_str)
         except (json.JSONDecodeError, TypeError):
@@ -349,8 +361,10 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
         }
         # Continue with basic listing creation even if AI fails
 
-    # Use Ollama's suggested price or fall back to Vinted price (ensure non-None)
-    listing_price = copy.get("suggested_price_gbp") or row["price"] or ""
+    # The real Vinted price is authoritative - never let Ollama's guess override a
+    # price we already know for certain. Only fall back to its suggestion when this
+    # Vinted item genuinely has no price on record.
+    listing_price = row["price"] or copy.get("suggested_price_gbp") or ""
 
     with get_connection() as conn:
         # Ensure we have valid data for database insertion
@@ -401,10 +415,14 @@ def import_vinted_export(
             # Convert photo URLs to JSON string
             photo_urls_json = json.dumps(item.photo_urls)
             
+            # INSERT OR REPLACE wipes every unlisted column back to its default on a
+            # conflict (it's a delete+insert, not a real update) - carry the existing
+            # dismissed flag through explicitly or re-importing the export would
+            # silently un-dismiss anything the user had removed from the UI.
             conn.execute(
-                """INSERT OR REPLACE INTO vinted_items (url, title, price, photo_urls, imported_listing_id)
-                   VALUES (?, ?, ?, ?, NULL)""",
-                (item.url or "", item.title, item.price, photo_urls_json)
+                """INSERT OR REPLACE INTO vinted_items (url, title, price, photo_urls, imported_listing_id, dismissed)
+                   VALUES (?, ?, ?, ?, NULL, COALESCE((SELECT dismissed FROM vinted_items WHERE url = ?), 0))""",
+                (item.url or "", item.title, item.price, photo_urls_json, item.url or "")
             )
     
     return {"status": "imported", "items_count": len(items)}

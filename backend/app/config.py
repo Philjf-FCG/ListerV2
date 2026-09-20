@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     ollama_vision_model: str = "gemma4:12b"
 
     local_photo_roots: str = ""
-    vinted_photos_dir: str = r"C:\Users\philj\Downloads\steamdeck3-20260902\listings\photos"
+    vinted_photos_dir: str = ""
 
     database_path: str = "./lister.db"
 

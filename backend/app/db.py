@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS vinted_items (
     price TEXT,
     photo_urls TEXT,               -- JSON array of photo URLs (all photos from Vinted)
     imported_listing_id INTEGER,   -- set once turned into a Lister listing via /sync/import
-    scraped_at TEXT NOT NULL DEFAULT (datetime('now'))
+    scraped_at TEXT NOT NULL DEFAULT (datetime('now')),
+    dismissed INTEGER NOT NULL DEFAULT 0  -- user removed it from the sync/age-report UI
 );
 """
 
@@ -136,6 +137,16 @@ def _migrate_ebay_sku_column(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_vinted_items_dismissed_column(conn: sqlite3.Connection) -> None:
+    """Adds "dismissed" so removing a Vinted item from the sync/age-report UI can be
+    a soft delete - a hard DELETE just reappears on the next sync since upsert_vinted_items
+    re-inserts by URL whenever the extension re-scrapes it."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(vinted_items)").fetchall()}
+    if "dismissed" in columns:
+        return
+    conn.execute("ALTER TABLE vinted_items ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0")
+
+
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(_SCHEMA)
@@ -147,6 +158,7 @@ def init_db() -> None:
         _migrate_legacy_single_photo_columns(conn)
         _migrate_vinted_items_photo_urls(conn)
         _migrate_ebay_sku_column(conn)
+        _migrate_vinted_items_dismissed_column(conn)
 
 
 @contextmanager

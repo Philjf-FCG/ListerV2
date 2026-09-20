@@ -70,13 +70,50 @@ def test_cache_vinted_photos_skips_failed_downloads_without_raising(tmp_path, mo
     assert len(cached) == 1
 
 
-def test_get_local_vinted_photos_prefers_cache_over_configured_dir(tmp_path, monkeypatch):
+class _FakeSettings:
+    def __init__(self, vinted_photos_dir=""):
+        self.vinted_photos_dir = vinted_photos_dir
+
+
+def test_get_local_vinted_photos_falls_back_to_cache_when_no_export_configured(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "_PHOTO_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(sync, "get_settings", lambda: _FakeSettings(vinted_photos_dir=""))
     item_folder = tmp_path / "555"
     item_folder.mkdir()
     (item_folder / "photo_0.jpg").write_bytes(_fake_jpeg_bytes())
 
     photos = sync.get_local_vinted_photos("https://www.vinted.co.uk/items/555-thing")
+    assert len(photos) == 1
+    assert photos[0].name == "photo_0.jpg"
+
+
+def test_get_local_vinted_photos_prefers_export_dir_over_cache(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache"
+    export_dir = tmp_path / "export"
+    monkeypatch.setattr(sync, "_PHOTO_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(sync, "get_settings", lambda: _FakeSettings(vinted_photos_dir=str(export_dir)))
+
+    (cache_dir / "777").mkdir(parents=True)
+    (cache_dir / "777" / "photo_0.jpg").write_bytes(_fake_jpeg_bytes())
+    (export_dir / "777").mkdir(parents=True)
+    (export_dir / "777" / "01_real.webp").write_bytes(_fake_jpeg_bytes())
+
+    photos = sync.get_local_vinted_photos("https://www.vinted.co.uk/items/777-thing")
+    assert len(photos) == 1
+    assert photos[0].name == "01_real.webp"  # the real export, not the low-res CDN cache
+
+
+def test_get_local_vinted_photos_falls_back_to_cache_when_item_missing_from_export(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache"
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    monkeypatch.setattr(sync, "_PHOTO_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(sync, "get_settings", lambda: _FakeSettings(vinted_photos_dir=str(export_dir)))
+
+    (cache_dir / "888").mkdir(parents=True)
+    (cache_dir / "888" / "photo_0.jpg").write_bytes(_fake_jpeg_bytes())
+
+    photos = sync.get_local_vinted_photos("https://www.vinted.co.uk/items/888-thing")
     assert len(photos) == 1
     assert photos[0].name == "photo_0.jpg"
 

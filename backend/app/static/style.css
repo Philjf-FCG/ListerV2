@@ -53,6 +53,7 @@ button:hover { background: #235a94; }
 .status-draft_pending { color: #b7791f; }
 .status-reviewed_ready { color: #2f855a; }
 .status-posted_as_draft { color: #2b6cb0; }
+.status-published { color: #276749; font-weight: 600; }
 .status-failed { color: #c53030; }
 .publish-ebay-btn {
   background: #276749;
