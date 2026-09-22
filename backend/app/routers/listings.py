@@ -175,8 +175,10 @@ def get_listing_photo(listing_id: int, index: int):
                 raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")
             mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
             return Response(content=path.read_bytes(), media_type=mime)
-        except Exception:
-            # Fallback to original behavior if parsing fails
+        except HTTPException:
+            raise
+        except OSError:
+            # Fallback to original behavior if path parsing fails
             pass
     elif ref_uri.lower().startswith("file://"):
         try:
@@ -186,8 +188,10 @@ def get_listing_photo(listing_id: int, index: int):
                 raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")
             mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
             return Response(content=path.read_bytes(), media_type=mime)
-        except Exception:
-            # Fallback to original behavior if parsing fails
+        except HTTPException:
+            raise
+        except OSError:
+            # Fallback to original behavior if path parsing fails
             pass
     
     # Original functionality continues here - this part should work as before
@@ -196,5 +200,25 @@ def get_listing_photo(listing_id: int, index: int):
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")
         return Response(content=path.read_bytes(), media_type="image/jpeg")
-        
-    # Rest of the original function logic...
+
+    if item.source == "google_photos":
+        try:
+            content = google_photos.download_media_bytes(item.ref)
+        except RuntimeError as exc:
+            # Google's baseUrl is only cached in memory and expires ~60 min after
+            # it was picked, so a backend restart or a stale listing lands here.
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        mime = google_photos.get_cached_mime_type(item.ref)
+        return Response(content=content, media_type=mime)
+
+    if item.source == "url":
+        try:
+            with httpx.Client(timeout=30, follow_redirects=True) as client:
+                resp = client.get(item.ref)
+                resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Couldn't fetch photo URL: {exc}") from exc
+        mime = resp.headers.get("content-type") or mimetypes.guess_type(item.ref)[0] or "image/jpeg"
+        return Response(content=resp.content, media_type=mime)
+
+    raise HTTPException(status_code=400, detail=f"Unknown photo source: {item.source}")
