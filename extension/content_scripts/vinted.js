@@ -22,17 +22,17 @@ function setNativeValue(el, value) {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function showBanner(text) {
+function showBanner(text, { sticky = false, color = "#2f855a" } = {}) {
   const banner = document.createElement("div");
   banner.textContent = text;
   Object.assign(banner.style, {
     position: "fixed", top: "10px", right: "10px", zIndex: 999999,
-    background: "#2f855a", color: "white", padding: "10px 14px",
+    background: color, color: "white", padding: "10px 14px",
     borderRadius: "6px", fontFamily: "sans-serif", fontSize: "13px",
     boxShadow: "0 2px 8px rgba(0,0,0,0.2)", maxWidth: "320px",
   });
   document.body.appendChild(banner);
-  setTimeout(() => banner.remove(), 8000);
+  if (!sticky) setTimeout(() => banner.remove(), 8000);
 }
 
 function waitForElement(selector, timeoutMs = 15000) {
@@ -171,7 +171,25 @@ async function fillFromPendingListing() {
   }
 }
 
-fillFromPendingListing();
+// Wardrobe rotation: when the popup opens the ORIGINAL listing of an item being refreshed,
+// say so. This only shows a banner - Lister never clicks Delete; the user does that.
+async function showRotationBannerIfOriginal() {
+  const match = location.pathname.match(/\/items\/(\d+)/);
+  if (!match) return false;
+  const stored = await chrome.storage.local.get("lister_rotation_original");
+  const original = stored.lister_rotation_original;
+  if (!original || original.vintedId !== match[1]) return false;
+  showBanner(
+    "Lister: this is the ORIGINAL listing being refreshed. Once the new one is live, delete this one " +
+      "yourself (item menu > Delete), then tick it off in the Lister popup. Lister will not delete it for you.",
+    { sticky: true, color: "#c05621" }
+  );
+  return true;
+}
+
+showRotationBannerIfOriginal().then((isOriginal) => {
+  if (!isOriginal) fillFromPendingListing();
+});
 
 // --- Scraping the user's own Vinted listings page (for the Vinted<->eBay sync
 // feature) - triggered on-demand from the popup, not run automatically. Vinted's
@@ -348,7 +366,34 @@ function scrapeVintedListings() {
   return items;
 }
 
+// Scrolls the profile page until no more items load, so a wardrobe scan sees every live item.
+async function scrollWardrobeToEnd() {
+  const countItems = () =>
+    new Set(
+      [...document.querySelectorAll('a[href*="/items/"]')]
+        .map((a) => a.href.match(/\/items\/(\d+)/)?.[1])
+        .filter(Boolean)
+    ).size;
+  let last = -1;
+  let stable = 0;
+  for (let i = 0; i < 80 && stable < 3; i++) {
+    window.scrollTo(0, document.body.scrollHeight);
+    await new Promise((r) => setTimeout(r, 1200));
+    const n = countItems();
+    stable = n === last ? stable + 1 : 0;
+    last = n;
+  }
+  window.scrollTo(0, 0);
+  return last;
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "LISTER_SCAN_WARDROBE") {
+    scrollWardrobeToEnd()
+      .then(() => sendResponse({ items: scrapeVintedListings() }))
+      .catch((err) => sendResponse({ items: [], error: String(err) }));
+    return true;
+  }
   if (message?.type === "LISTER_SCRAPE_VINTED") {
     console.log("[Lister] Received LISTER_SCRAPE_VINTED message");
     const items = scrapeVintedListings();

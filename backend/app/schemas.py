@@ -53,6 +53,7 @@ class ListingOut(BaseModel):
     error: str | None
     created_at: str
     updated_at: str
+    source_vinted_item_id: int | None = None  # set on wardrobe-rotation drafts
 
 
 class ListingUpdate(BaseModel):
@@ -71,6 +72,13 @@ class VintedItemIn(BaseModel):
     price: str | None = None
     photo_urls: list[str] | None = None
     photo_url: str | None = None  # Backward compatibility for single photo
+    # Only populated from the Vinted data export (the live-page scraper can't see these)
+    listed_at: str | None = None  # ISO-8601 UTC upload date
+    description: str | None = None
+    brand: str | None = None
+    size: str | None = None
+    condition: str | None = None
+    colour: str | None = None
 
 
 class VintedItemOut(BaseModel):

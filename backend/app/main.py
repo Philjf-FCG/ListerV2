@@ -8,7 +8,7 @@ from starlette.requests import Request
 
 from app.config import get_settings
 from app.db import init_db
-from app.routers import auth, ebay, ebay_auth, listings, photos, refresh, sync
+from app.routers import auth, ebay, ebay_auth, listings, photos, refresh, rotate, sync
 
 _APP_DIR = Path(__file__).parent
 
@@ -29,6 +29,7 @@ app.include_router(ebay_auth.router)
 app.include_router(ebay.router)
 app.include_router(sync.router)
 app.include_router(refresh.router)
+app.include_router(rotate.router)
 
 app.mount("/static", StaticFiles(directory=str(_APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(_APP_DIR / "templates"))

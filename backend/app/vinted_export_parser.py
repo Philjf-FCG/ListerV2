@@ -1,9 +1,18 @@
 """Parse Vinted personal data export HTML file."""
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from bs4 import BeautifulSoup
 
 from app.schemas import VintedItemIn
+
+
+def parse_export_date(text: str) -> str | None:
+    """'2026-08-28 20:30:14 +0100' -> '2026-08-28T19:30:14+00:00' (UTC, sortable as text)."""
+    try:
+        return datetime.strptime(text.strip(), "%Y-%m-%d %H:%M:%S %z").astimezone(timezone.utc).isoformat()
+    except (ValueError, AttributeError):
+        return None
 
 
 def parse_vinted_export(html_path: str | Path) -> list[VintedItemIn]:
@@ -39,6 +48,11 @@ def parse_vinted_export(html_path: str | Path) -> list[VintedItemIn]:
             desc_elem = current.select_one('[itemprop="description"]')
             price_elem = current.find("span", attrs={"itemprop": "order_value"})
             
+            def _field(name: str) -> str | None:
+                el = current.select_one(f'[itemprop="{name}"]')
+                text = el.get_text(strip=True) if el else ""
+                return text or None
+
             title = title_elem.get_text(strip=True) if title_elem else ""
             description = desc_elem.get_text(strip=True, separator="\n") if desc_elem else ""
             price_text = price_elem.get_text(strip=True) if price_elem else ""
@@ -77,7 +91,13 @@ def parse_vinted_export(html_path: str | Path) -> list[VintedItemIn]:
                 url=vinted_url,
                 title=title,
                 price=price,
-                photo_urls=photo_urls
+                photo_urls=photo_urls,
+                listed_at=parse_export_date(_field("created_at") or ""),
+                description=description or None,
+                brand=_field("brand"),
+                size=_field("size"),
+                condition=_field("status"),
+                colour=_field("color"),
             ))
         
         # Move to next sibling

@@ -111,5 +111,107 @@ async function syncVintedListings() {
   }
 }
 
+// --- Wardrobe rotation ------------------------------------------------------------
+const rotationStatusEl = document.getElementById("rotation-status");
+const rotationListEl = document.getElementById("rotation-list");
+
+async function apiJson(path, options) {
+  const res = await fetch(`${LISTER_API_BASE}${path}`, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `backend returned ${res.status}`);
+  return body;
+}
+
+async function scanWardrobe() {
+  rotationStatusEl.textContent = "Scrolling your wardrobe and scanning - this can take a minute...";
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url?.includes("vinted.")) {
+      rotationStatusEl.textContent = "Open your Vinted profile page (showing your items) in this tab first.";
+      return;
+    }
+    const response = await sendVintedMessage(tab.id, { type: "LISTER_SCAN_WARDROBE" });
+    const items = response?.items ?? [];
+    if (!items.length) {
+      rotationStatusEl.textContent = "Found 0 items - make sure this tab is your Vinted profile page.";
+      return;
+    }
+    await apiJson("/rotate/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(items),
+    });
+    rotationStatusEl.textContent = `Scanned ${items.length} live item(s). Check that matches your wardrobe, then pick.`;
+    await loadRotation();
+  } catch (err) {
+    rotationStatusEl.textContent = `Scan failed: ${err.message || err}`;
+  }
+}
+
+async function planRotation() {
+  rotationStatusEl.textContent = "Backing up photos and writing fresh copy - this can take a few minutes...";
+  try {
+    const result = await apiJson("/rotate/plan", { method: "POST" });
+    const skipped = result.skipped.length ? ` ${result.skipped.length} skipped (no photos or copy failed).` : "";
+    rotationStatusEl.textContent = `${result.message}${skipped}`;
+    await loadRotation();
+  } catch (err) {
+    rotationStatusEl.textContent = `Couldn't pick: ${err.message || err}`;
+  }
+}
+
+const STAGE_TEXT = {
+  draft_pending: "Review & approve the new draft in the Lister web UI first.",
+  reviewed_ready: "Approved - use 'Open Vinted & fill draft' above, then publish it yourself.",
+  posted_as_draft: "Draft filled on Vinted - publish it yourself.",
+};
+
+async function loadRotation() {
+  rotationListEl.textContent = "";
+  let status;
+  try {
+    status = await apiJson("/rotate/status");
+  } catch {
+    return;
+  }
+  for (const rot of status.open_rotations) {
+    const div = document.createElement("div");
+    div.className = "listing";
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = rot.original_title;
+    const stage = document.createElement("div");
+    stage.className = "note";
+    stage.textContent = STAGE_TEXT[rot.listing_status] ?? rot.listing_status;
+    div.append(title, stage);
+
+    if (rot.delete_ready) {
+      const open = document.createElement("button");
+      open.textContent = "Open ORIGINAL on Vinted (to delete it)";
+      open.addEventListener("click", async () => {
+        const vintedId = rot.url.match(/\/items\/(\d+)/)?.[1];
+        await chrome.storage.local.set({ lister_rotation_original: { vintedId } });
+        chrome.tabs.create({ url: rot.url });
+      });
+      const done = document.createElement("button");
+      done.textContent = "I've deleted the original";
+      done.addEventListener("click", async () => {
+        if (!confirm(`Only confirm if you've already deleted "${rot.original_title}" on Vinted. Continue?`)) return;
+        try {
+          await apiJson(`/rotate/${rot.vinted_item_id}/deleted`, { method: "POST" });
+          await loadRotation();
+        } catch (err) {
+          rotationStatusEl.textContent = `Couldn't update: ${err.message || err}`;
+        }
+      });
+      div.append(open, done);
+    }
+    rotationListEl.appendChild(div);
+  }
+}
+
 document.getElementById("sync-vinted-btn").addEventListener("click", syncVintedListings);
+document.getElementById("scan-wardrobe-btn")?.addEventListener("click", scanWardrobe);
+document.getElementById("plan-rotation-btn")?.addEventListener("click", planRotation);
 loadReadyListings();
+loadRotation();

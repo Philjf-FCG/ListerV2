@@ -33,6 +33,18 @@ CREATE TABLE IF NOT EXISTS vinted_items (
     scraped_at TEXT NOT NULL DEFAULT (datetime('now')),
     dismissed INTEGER NOT NULL DEFAULT 0  -- user removed it from the sync/age-report UI
 );
+
+-- Real per-item details from the Vinted GDPR export, keyed by Vinted's numeric item id
+-- (the export's item URLs have no slug, so they never match scraped URLs by string).
+CREATE TABLE IF NOT EXISTS vinted_export_items (
+    vinted_id TEXT PRIMARY KEY,
+    listed_at TEXT,                -- ISO-8601 UTC, from the export's "Date when uploaded"
+    description TEXT,
+    brand TEXT,
+    size TEXT,
+    condition TEXT,
+    colour TEXT
+);
 """
 
 
@@ -147,6 +159,20 @@ def _migrate_vinted_items_dismissed_column(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE vinted_items ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0")
 
 
+def _migrate_rotation_columns(conn: sqlite3.Connection) -> None:
+    """Wardrobe rotation: last_seen_at marks items present in the latest full wardrobe
+    scan, rotated_at is set once the user confirms they deleted the original on Vinted,
+    and listings.source_vinted_item_id links a refreshed draft back to that original."""
+    vinted_cols = {row["name"] for row in conn.execute("PRAGMA table_info(vinted_items)").fetchall()}
+    if "last_seen_at" not in vinted_cols:
+        conn.execute("ALTER TABLE vinted_items ADD COLUMN last_seen_at TEXT")
+    if "rotated_at" not in vinted_cols:
+        conn.execute("ALTER TABLE vinted_items ADD COLUMN rotated_at TEXT")
+    listing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(listings)").fetchall()}
+    if "source_vinted_item_id" not in listing_cols:
+        conn.execute("ALTER TABLE listings ADD COLUMN source_vinted_item_id INTEGER")
+
+
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(_SCHEMA)
@@ -159,6 +185,7 @@ def init_db() -> None:
         _migrate_vinted_items_photo_urls(conn)
         _migrate_ebay_sku_column(conn)
         _migrate_vinted_items_dismissed_column(conn)
+        _migrate_rotation_columns(conn)
 
 
 @contextmanager

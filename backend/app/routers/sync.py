@@ -158,6 +158,12 @@ def upsert_vinted_items(items: list[VintedItemIn]):
     """Extension posts whatever it scraped from the Vinted listings page here.
     Photos are downloaded and cached to disk immediately, while the scraped CDN
     URLs are still fresh - see cache_vinted_photos()."""
+    return upsert_scraped_items(items)
+
+
+def upsert_scraped_items(items: list[VintedItemIn], scan_at: str | None = None, cache_photos: bool = True):
+    """scan_at (full-wardrobe scans only) stamps every item with one shared timestamp
+    so "present in the latest scan" means exactly last_seen_at == MAX(last_seen_at)."""
     logger.info("Received %d scraped Vinted item(s)", len(items))
 
     with get_connection() as conn:
@@ -180,9 +186,11 @@ def upsert_vinted_items(items: list[VintedItemIn]):
                         price = excluded.price, photo_urls = excluded.photo_urls""",
                 (item.url, item.title, price, photo_data),
             )
+            if scan_at:
+                conn.execute("UPDATE vinted_items SET last_seen_at = ? WHERE url = ?", (scan_at, item.url))
 
             item_id = _vinted_item_id(item.url)
-            if item_id and photo_urls:
+            if cache_photos and item_id and photo_urls:
                 cached = cache_vinted_photos(item_id, photo_urls)
                 logger.info("Cached %d/%d photo(s) for Vinted item %s", len(cached), len(photo_urls), item_id)
 
@@ -420,9 +428,22 @@ def import_vinted_export(
             # dismissed flag through explicitly or re-importing the export would
             # silently un-dismiss anything the user had removed from the UI.
             conn.execute(
-                """INSERT OR REPLACE INTO vinted_items (url, title, price, photo_urls, imported_listing_id, dismissed)
-                   VALUES (?, ?, ?, ?, NULL, COALESCE((SELECT dismissed FROM vinted_items WHERE url = ?), 0))""",
-                (item.url or "", item.title, item.price, photo_urls_json, item.url or "")
+                """INSERT OR REPLACE INTO vinted_items
+                       (url, title, price, photo_urls, imported_listing_id, dismissed, last_seen_at, rotated_at)
+                   VALUES (?, ?, ?, ?, NULL,
+                           COALESCE((SELECT dismissed FROM vinted_items WHERE url = ?), 0),
+                           (SELECT last_seen_at FROM vinted_items WHERE url = ?),
+                           (SELECT rotated_at FROM vinted_items WHERE url = ?))""",
+                (item.url or "", item.title, item.price, photo_urls_json,
+                 item.url or "", item.url or "", item.url or "")
             )
+            if item_id:
+                conn.execute(
+                    """INSERT OR REPLACE INTO vinted_export_items
+                           (vinted_id, listed_at, description, brand, size, condition, colour)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (item_id, item.listed_at, item.description, item.brand, item.size,
+                     item.condition, item.colour),
+                )
     
     return {"status": "imported", "items_count": len(items)}
