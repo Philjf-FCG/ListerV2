@@ -6,6 +6,7 @@ __pycache__/
 *.db
 thumbnails/
 vinted_photo_cache/
+rotation_backups/
 vinted_scrape_debug.json
 google_token.json
 ebay_token.json
