@@ -131,7 +131,17 @@ async function scanWardrobe() {
       return;
     }
     const response = await sendVintedMessage(tab.id, { type: "LISTER_SCAN_WARDROBE" });
-    const items = response?.items ?? [];
+    if (!response) {
+      rotationStatusEl.textContent =
+        "This Vinted tab didn't answer - it's still running an old copy of the extension. " +
+        "Reload the extension at chrome://extensions, refresh the Vinted tab, then try again.";
+      return;
+    }
+    if (response.error) {
+      rotationStatusEl.textContent = `The scan failed on the page: ${response.error}`;
+      return;
+    }
+    const items = response.items ?? [];
     if (!items.length) {
       rotationStatusEl.textContent = "Found 0 items - make sure this tab is your Vinted profile page.";
       return;
