@@ -191,6 +191,45 @@ def test_export_parser_reads_real_upload_date_and_details(tmp_path):
     assert (item.brand, item.size, item.condition, item.colour) == ("Acme", "L", "Very good", "Blue")
 
 
+def test_export_parser_keeps_all_digits_of_11_digit_item_ids(tmp_path):
+    export = tmp_path / "index.html"
+    export.write_text(EXPORT_HTML.replace("9000000001", "10030496030"), encoding="utf-8")
+    assert parse_vinted_export(export)[0].url == "https://www.vinted.co.uk/items/10030496030"
+
+
+def test_import_dates_replaces_stale_rows(env, tmp_path):
+    client, _ = env
+    with db.get_connection() as conn:
+        conn.execute("INSERT INTO vinted_export_items (vinted_id, listed_at) VALUES ('1003049603', 'stale')")
+    export = tmp_path / "index.html"
+    export.write_text(EXPORT_HTML, encoding="utf-8")
+    client.post("/rotate/import-dates", params={"export_path": str(export)})
+    with db.get_connection() as conn:
+        ids = [r[0] for r in conn.execute("SELECT vinted_id FROM vinted_export_items")]
+    assert ids == ["9000000001"]
+
+
+def test_import_dates_only_touches_the_dates_table(env, tmp_path):
+    client, _ = env
+    url = "https://www.vinted.co.uk/items/9000000001-jacket"
+    with db.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO vinted_items (url, title, imported_listing_id, last_seen_at) VALUES (?, 'x', 42, 'SCAN')",
+            (url,),
+        )
+    export = tmp_path / "index.html"
+    export.write_text(EXPORT_HTML, encoding="utf-8")
+
+    result = client.post("/rotate/import-dates", params={"export_path": str(export)}).json()
+    assert result == {"status": "ok", "stored": 1, "live_items": 1, "live_items_with_dates": 1}
+
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT * FROM vinted_items WHERE url = ?", (url,)).fetchone()
+        count = conn.execute("SELECT COUNT(*) FROM vinted_items").fetchone()[0]
+    assert row["imported_listing_id"] == 42 and row["last_seen_at"] == "SCAN" and count == 1
+    assert client.post("/rotate/import-dates", params={"export_path": str(tmp_path / "nope.html")}).status_code == 404
+
+
 def test_export_import_stores_dates_and_keeps_scan_state(env, tmp_path):
     client, _ = env
     url = "https://www.vinted.co.uk/items/9000000001"

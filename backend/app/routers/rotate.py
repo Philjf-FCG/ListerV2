@@ -204,6 +204,40 @@ def scan(items: list[VintedItemIn]):
     return {"status": "ok", "count": len(items), "scan_at": scan_at}
 
 
+@router.post("/import-dates")
+def import_dates(export_path: str = r"c:\vinted\data\listings\index.html"):
+    """Loads real upload dates/details from the Vinted data export into vinted_export_items
+    only. Unlike /sync/import-vinted-export this never touches vinted_items, so it can't
+    disturb eBay import links or scan state, and it's safe to re-run."""
+    from app.vinted_export_parser import parse_vinted_export
+
+    if not Path(export_path).exists():
+        raise HTTPException(status_code=404, detail=f"Export file not found: {export_path}")
+    try:
+        items = parse_vinted_export(export_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Failed to parse export: {exc}") from exc
+
+    stored = 0
+    with get_connection() as conn:
+        conn.execute("DELETE FROM vinted_export_items")  # derived data - rebuilt from the export each time
+        for item in items:
+            vinted_id = sync._vinted_item_id(item.url)
+            if not vinted_id:
+                continue
+            conn.execute(
+                """INSERT OR REPLACE INTO vinted_export_items
+                       (vinted_id, listed_at, description, brand, size, condition, colour)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (vinted_id, item.listed_at, item.description, item.brand, item.size,
+                 item.condition, item.colour),
+            )
+            stored += 1
+        live, _ = _live_items(conn)
+    dated = sum(1 for i in live if i["listed_at"])
+    return {"status": "ok", "stored": stored, "live_items": len(live), "live_items_with_dates": dated}
+
+
 @router.get("/status")
 def status():
     with get_connection() as conn:

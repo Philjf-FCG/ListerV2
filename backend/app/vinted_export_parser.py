@@ -76,7 +76,8 @@ def parse_vinted_export(html_path: str | Path) -> list[VintedItemIn]:
                     
                     # Extract item ID from photo path for the main Vinted URL
                     if item_id is None:
-                        id_match = re.search(r"(\d{10})", url)
+                        # Vinted ids are now 11 digits - a fixed \d{10} silently truncated them
+                        id_match = re.search(r"(\d{10,})", url)
                         if id_match:
                             item_id = id_match.group(1)
                     
