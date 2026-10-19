@@ -161,7 +161,9 @@ async function scanWardrobe() {
 async function planRotation() {
   rotationStatusEl.textContent = "Backing up photos and writing fresh copy - this can take a few minutes...";
   try {
-    const result = await apiJson("/rotate/plan", { method: "POST" });
+    const group = document.getElementById("rotation-group")?.value.trim();
+    const query = group ? `?group=${encodeURIComponent(group)}` : "";
+    const result = await apiJson(`/rotate/plan${query}`, { method: "POST" });
     const skipped = result.skipped.length ? ` ${result.skipped.length} skipped (no photos or copy failed).` : "";
     rotationStatusEl.textContent = `${result.message}${skipped}`;
     await loadRotation();
@@ -220,8 +222,25 @@ async function loadRotation() {
   }
 }
 
+async function loadGroups() {
+  const list = document.getElementById("rotation-groups");
+  if (!list) return;
+  try {
+    const { brands } = await apiJson("/rotate/groups");
+    for (const b of brands) {
+      const option = document.createElement("option");
+      option.value = b.name;
+      option.label = `${b.name} (${b.count})`;
+      list.appendChild(option);
+    }
+  } catch {
+    // suggestions are optional - typing a term works without them
+  }
+}
+
 document.getElementById("sync-vinted-btn").addEventListener("click", syncVintedListings);
 document.getElementById("scan-wardrobe-btn")?.addEventListener("click", scanWardrobe);
 document.getElementById("plan-rotation-btn")?.addEventListener("click", planRotation);
 loadReadyListings();
 loadRotation();
+loadGroups();

@@ -45,6 +45,15 @@ CREATE TABLE IF NOT EXISTS vinted_export_items (
     condition TEXT,
     colour TEXT
 );
+
+-- Append-only log of wardrobe-rotation picks, keyed by Vinted id (not row id, so it survives
+-- re-scans and deleted drafts). A picked item counts as relisted at picked_at for ranking.
+CREATE TABLE IF NOT EXISTS rotation_picks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vinted_id TEXT NOT NULL,
+    picked_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rotation_picks_vinted ON rotation_picks(vinted_id);
 """
 
 

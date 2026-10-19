@@ -13,6 +13,8 @@ Flow (nothing here touches Vinted - the extension scans, and the user publishes/
 import json
 import logging
 import random
+import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -32,6 +34,7 @@ router = APIRouter(prefix="/rotate", tags=["rotate"])
 
 POOL_SIZE = 20
 PICK_COUNT = 5
+COOLDOWN_DAYS = 28
 SCAN_MAX_AGE = timedelta(hours=24)
 _BACKUP_DIR = BACKEND_DIR / "rotation_backups"
 
@@ -49,9 +52,33 @@ def _age_days(listed_at: str | None) -> int | None:
         return None
 
 
+def _backfill_pick_log(conn) -> None:
+    """One-off recovery for picks made before the pick log existed: every folder in
+    rotation_backups was a pick, and its original.json records when. Only runs while the
+    log is empty, so it can't double-count once real picks are being recorded."""
+    if conn.execute("SELECT COUNT(*) FROM rotation_picks").fetchone()[0] or not _BACKUP_DIR.is_dir():
+        return
+    for meta_file in _BACKUP_DIR.glob("*/original.json"):
+        try:
+            picked_at = json.loads(meta_file.read_text(encoding="utf-8")).get("backed_up_at")
+        except (OSError, json.JSONDecodeError):
+            continue
+        if picked_at:
+            conn.execute(
+                "INSERT INTO rotation_picks (vinted_id, picked_at) VALUES (?, ?)", (meta_file.parent.name, picked_at)
+            )
+
+
 def _live_items(conn) -> tuple[list[dict], str | None]:
     """Items present in the most recent full wardrobe scan (one per Vinted id), joined
-    with the export's real upload date/details. Returns (items, scan_at)."""
+    with the export's real upload date/details. Each gets effective_at: the later of its
+    real upload date and its last rotation pick, because a picked item is treated as
+    relisted at that moment. Returns (items, scan_at)."""
+    _backfill_pick_log(conn)
+    last_picks = {
+        r["vinted_id"]: r["m"]
+        for r in conn.execute("SELECT vinted_id, MAX(picked_at) AS m FROM rotation_picks GROUP BY vinted_id")
+    }
     scan_at = conn.execute("SELECT MAX(last_seen_at) AS m FROM vinted_items").fetchone()["m"]
     if not scan_at:
         return [], None
@@ -73,9 +100,13 @@ def _live_items(conn) -> tuple[list[dict], str | None]:
         except (json.JSONDecodeError, TypeError):
             data["photo_urls"] = []
         meta = export.get(vinted_id, {})
+        listed_at = meta.get("listed_at")
+        last_picked_at = last_picks.get(vinted_id)
         data.update(
             vinted_id=vinted_id,
-            listed_at=meta.get("listed_at"),
+            listed_at=listed_at,
+            last_picked_at=last_picked_at,
+            effective_at=max(listed_at, last_picked_at) if listed_at and last_picked_at else listed_at,
             description=meta.get("description"),
             brand=meta.get("brand"),
             size=meta.get("size"),
@@ -86,12 +117,39 @@ def _live_items(conn) -> tuple[list[dict], str | None]:
     return items, scan_at
 
 
-def _oldest_pool(live: list[dict], pool_size: int) -> tuple[list[dict], int]:
-    """Oldest items by real upload date. Items with no date in the export are newer than
-    the export itself (anything live before it was taken would be in it), so they can't
-    belong in the oldest pool - they're just counted so the UI can mention them."""
-    dated = sorted((i for i in live if i["listed_at"]), key=lambda i: i["listed_at"])
-    return dated[:pool_size], len(live) - len(dated)
+def _parse_group(group: str | None) -> list[str]:
+    return [t.strip() for t in (group or "").split(",") if t.strip()]
+
+
+def _matches_group(item: dict, terms: list[str]) -> bool:
+    """Any term matches the start of a word in the title or brand ('game' also finds 'games')."""
+    haystack = f"{item['title']} {item.get('brand') or ''}"
+    return any(re.search(r"\b" + re.escape(t), haystack, re.IGNORECASE) for t in terms)
+
+
+def _in_cooldown(item: dict, cooldown_days: int) -> bool:
+    if not cooldown_days or not item["last_picked_at"]:
+        return False
+    try:
+        return _now() - datetime.fromisoformat(item["last_picked_at"]) < timedelta(days=cooldown_days)
+    except ValueError:
+        return False
+
+
+def _oldest_pool(
+    live: list[dict], pool_size: int, group: str | None = None, cooldown_days: int = COOLDOWN_DAYS
+) -> tuple[list[dict], int]:
+    """Oldest items by effective date (real upload date, or last rotation pick if later),
+    optionally limited to a group, and never including anything picked within cooldown_days
+    (ranking alone isn't enough: in a small group a picked item would rejoin the pool in days).
+    Items with no date in the export are newer than the export itself (anything live before
+    it was taken would be in it), so they can't belong in the oldest pool - they're just
+    counted so the UI can mention them."""
+    terms = _parse_group(group)
+    candidates = [i for i in live if _matches_group(i, terms)] if terms else live
+    candidates = [i for i in candidates if not _in_cooldown(i, cooldown_days)]
+    dated = sorted((i for i in candidates if i["listed_at"]), key=lambda i: i["effective_at"])
+    return dated[:pool_size], len(candidates) - len(dated)
 
 
 def _open_rotations(conn) -> list[dict]:
@@ -116,7 +174,8 @@ def _summarise(item: dict) -> dict:
         "title": item["title"],
         "url": item["url"],
         "listed_at": item["listed_at"],
-        "age_days": _age_days(item["listed_at"]),
+        "last_rotated_at": item["last_picked_at"],
+        "age_days": _age_days(item["effective_at"]),
     }
 
 
@@ -190,6 +249,12 @@ def _create_draft(item: dict, photos: list[Path]) -> tuple[int, str | None]:
             (json.dumps(photo_items), json.dumps(thumbs), copy.get("title"), copy.get("description"),
              price, condition, copy.get("tags"), item["id"]),
         )
+        # Logged in the same transaction as the draft, and keyed by Vinted id, so deleting the
+        # draft later does not make the original eligible for another pick.
+        conn.execute(
+            "INSERT INTO rotation_picks (vinted_id, picked_at) VALUES (?, ?)",
+            (item["vinted_id"], _now().isoformat(timespec="seconds")),
+        )
         return cur.lastrowid, copy.get("title")
 
 
@@ -238,12 +303,22 @@ def import_dates(export_path: str = r"c:\vinted\data\listings\index.html"):
     return {"status": "ok", "stored": stored, "live_items": len(live), "live_items_with_dates": dated}
 
 
+@router.get("/groups")
+def groups():
+    """Brands among the live items (from the data export), most common first, to offer as
+    quick filters. Free-text terms also work: see the group parameter on /plan."""
+    with get_connection() as conn:
+        live, _ = _live_items(conn)
+    counts = Counter(i["brand"] for i in live if i.get("brand"))
+    return {"brands": [{"name": name, "count": n} for name, n in counts.most_common(40)]}
+
+
 @router.get("/status")
-def status():
+def status(group: str | None = None, cooldown_days: int = COOLDOWN_DAYS):
     with get_connection() as conn:
         live, scan_at = _live_items(conn)
         open_rotations = [r for r in _open_rotations(conn) if not r["rotated_at"]]
-    pool, undated = _oldest_pool(live, POOL_SIZE)
+    pool, undated = _oldest_pool(live, POOL_SIZE, group, cooldown_days)
     return {
         "scan_at": scan_at,
         "live_count": len(live),
@@ -254,7 +329,17 @@ def status():
 
 
 @router.post("/plan")
-def plan(count: int = PICK_COUNT, pool: int = POOL_SIZE, force: bool = False, seed: int | None = None):
+def plan(
+    count: int = PICK_COUNT,
+    pool: int = POOL_SIZE,
+    force: bool = False,
+    seed: int | None = None,
+    group: str | None = None,
+    cooldown_days: int = COOLDOWN_DAYS,
+):
+    """group: optional comma-separated terms (e.g. "lego, minifigure"); only live items whose
+    title or brand starts a word with any term are considered - the oldest `pool` of those.
+    Anything picked in the last cooldown_days days is skipped (0 turns the cooldown off)."""
     if not 1 <= count <= pool <= 50:
         raise HTTPException(status_code=400, detail="Need 1 <= count <= pool <= 50")
 
@@ -270,7 +355,16 @@ def plan(count: int = PICK_COUNT, pool: int = POOL_SIZE, force: bool = False, se
             detail=f"{len(open_rotations)} rotation(s) still in progress - finish deleting those originals first",
         )
 
-    pool_items, undated = _oldest_pool(live, pool)
+    pool_items, undated = _oldest_pool(live, pool, group, cooldown_days)
+    if _parse_group(group) and not pool_items:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No live, dated items match '{group}' outside the {cooldown_days}-day cooldown",
+        )
+    if not pool_items and cooldown_days and any(i["last_picked_at"] for i in live):
+        raise HTTPException(
+            status_code=400, detail=f"Everything dated was rotated within the last {cooldown_days} days"
+        )
     if not pool_items:
         raise HTTPException(
             status_code=400,
@@ -298,12 +392,16 @@ def plan(count: int = PICK_COUNT, pool: int = POOL_SIZE, force: bool = False, se
             continue
         picked.append({**_summarise(item), "listing_id": listing_id, "new_title": new_title})
 
+    scope = f"'{group}' " if _parse_group(group) else ""
+    short = ""
+    if len(picked) < count and not skipped:
+        short = f" Only {len(picked)} could be picked - the rest were rotated in the last {cooldown_days} days."
     return {
         "picked": picked,
         "skipped": skipped,
         "pool_size": len(pool_items),
         "undated_items": undated,
-        "message": f"{len(picked)} draft(s) created from the oldest {len(pool_items)} items. "
+        "message": f"{len(picked)} draft(s) created from the oldest {len(pool_items)} {scope}items.{short} "
         "Review them in Lister, publish the new listings on Vinted, then delete the originals.",
     }
 

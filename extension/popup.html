@@ -24,6 +24,10 @@
   <h1>Wardrobe rotation</h1>
   <p class="note">Refreshes 5 random items from your 20 oldest (by real upload date). It makes drafts and backups only - you publish the new listings and delete the originals yourself.</p>
   <button id="scan-wardrobe-btn">1. Scan my whole wardrobe (open your Vinted profile first)</button>
+  <input id="rotation-group" list="rotation-groups" autocomplete="off"
+         placeholder="Optional: only rotate… (e.g. lego, pc game, trainers)"
+         style="width:100%;box-sizing:border-box;margin-top:0.35rem;padding:0.3rem" />
+  <datalist id="rotation-groups"></datalist>
   <button id="plan-rotation-btn">2. Pick 5 and create drafts</button>
   <p id="rotation-status" class="note"></p>
   <div id="rotation-list"></div>

@@ -4,6 +4,7 @@ Everything runs against a throwaway SQLite file with Ollama and photo lookups st
 so it never touches the real lister.db or the network.
 """
 import json
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -113,10 +114,115 @@ def test_plan_is_deterministic_for_a_seed(env):
     _scan(client)
     _add_export_dates()
     first = [p["vinted_id"] for p in client.post("/rotate/plan?seed=7").json()["picked"]]
-    with db.get_connection() as conn:
+    with db.get_connection() as conn:  # back to a clean slate: no drafts, no pick history
         conn.execute("DELETE FROM listings")
+        conn.execute("DELETE FROM rotation_picks")
+    shutil.rmtree(rotate._BACKUP_DIR)
     second = [p["vinted_id"] for p in client.post("/rotate/plan?seed=7").json()["picked"]]
     assert first == second
+
+
+def test_picked_items_never_come_back_even_if_drafts_are_deleted(env):
+    client, _ = env
+    _scan(client)
+    _add_export_dates()
+    seen: set[str] = set()
+    for seed in range(1, 6):
+        picked = {p["vinted_id"] for p in client.post(f"/rotate/plan?seed={seed}").json()["picked"]}
+        assert len(picked) == 5 and not (picked & seen), "an already-picked item was picked again"
+        seen |= picked
+        with db.get_connection() as conn:  # the user throws the drafts away each time
+            conn.execute("DELETE FROM listings")
+        assert not (seen & {o["vinted_id"] for o in client.get("/rotate/status").json()["oldest"]})
+
+
+def test_picked_item_is_ranked_as_if_relisted_at_the_pick_time(env):
+    client, _ = env
+    _scan(client)
+    _add_export_dates()
+    pick = client.post("/rotate/plan?seed=1").json()["picked"][0]["vinted_id"]
+    # cooldown off: only the effective-date ranking is keeping the pick out of the pool
+    live = {o["vinted_id"]: o for o in client.get("/rotate/status?cooldown_days=0").json()["oldest"]}
+    assert pick not in live
+    with db.get_connection() as conn:
+        listed, picked_at = conn.execute(
+            "SELECT e.listed_at, p.picked_at FROM vinted_export_items e JOIN rotation_picks p "
+            "ON p.vinted_id = e.vinted_id WHERE e.vinted_id = ?", (pick,)
+        ).fetchone()
+    assert picked_at > listed  # the real date is untouched; the pick time just outranks it
+
+
+def test_pick_history_is_recovered_from_backup_folders(env):
+    client, _ = env
+    _scan(client)
+    _add_export_dates()
+    folder = rotate._BACKUP_DIR / str(FIRST_ID)  # the oldest item, picked before the log existed
+    folder.mkdir(parents=True)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    (folder / "original.json").write_text(json.dumps({"backed_up_at": now}))
+    oldest = [o["vinted_id"] for o in client.get("/rotate/status").json()["oldest"]]
+    assert str(FIRST_ID) not in oldest and len(oldest) == 20
+
+
+def _scan_mixed(client):
+    items = [
+        {"url": f"https://www.vinted.co.uk/items/{FIRST_ID + i}-s", "title": f"{'LEGO minifigure' if i % 3 == 0 else 'Trainers'} {i}", "price": "5"}
+        for i in range(30)
+    ]
+    assert client.post("/rotate/scan", json=items).status_code == 200
+
+
+def test_group_limits_picks_to_matching_items(env):
+    client, _ = env
+    _scan_mixed(client)
+    _add_export_dates()
+    result = client.post("/rotate/plan?group=lego&seed=1").json()
+    assert len(result["picked"]) == 5 and all("LEGO" in p["title"] for p in result["picked"])
+    assert result["pool_size"] == 10 and "'lego'" in result["message"]
+    assert client.post("/rotate/plan?group=zzz&force=true").status_code == 400
+
+
+def test_small_group_does_not_repick_within_the_cooldown(env):
+    client, _ = env
+    _scan_mixed(client)  # only 10 LEGO items, so a 20-item pool would otherwise rejoin them at once
+    _add_export_dates()
+    first = {p["vinted_id"] for p in client.post("/rotate/plan?group=lego&seed=1").json()["picked"]}
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM listings")
+    second = client.post("/rotate/plan?group=lego&seed=2").json()
+    second_ids = {p["vinted_id"] for p in second["picked"]}
+    assert len(first) == 5 and len(second_ids) == 5 and not (first & second_ids)  # the other five LEGO items
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM listings")
+    third = client.post("/rotate/plan?group=lego")
+    assert third.status_code == 400 and "cooldown" in third.json()["detail"]  # all ten are cooling down
+    assert len(client.post("/rotate/plan?group=lego&cooldown_days=0").json()["picked"]) == 5  # explicit override
+
+
+def test_cooldown_window_boundaries():
+    now = datetime.now(timezone.utc)
+    thirty_days_ago = {"last_picked_at": (now - timedelta(days=30)).isoformat()}
+    assert not rotate._in_cooldown(thirty_days_ago, 28)  # 28-day cooldown has expired
+    assert rotate._in_cooldown(thirty_days_ago, 60)
+    assert rotate._in_cooldown({"last_picked_at": now.isoformat()}, 28)
+    assert not rotate._in_cooldown({"last_picked_at": now.isoformat()}, 0)  # 0 disables it
+    assert not rotate._in_cooldown({"last_picked_at": None}, 28)  # never picked
+
+
+def test_group_accepts_several_terms_and_prefix_matches(env):
+    client, _ = env
+    _scan_mixed(client)
+    _add_export_dates()
+    both = client.get("/rotate/status?group=lego,trainer").json()
+    assert len(both["oldest"]) == 20  # 10 LEGO + 18 trainers dated, capped at the pool size
+    assert len(client.get("/rotate/status?group=train").json()["oldest"]) == 18  # 'train' finds 'Trainers'
+
+
+def test_groups_endpoint_lists_brands_by_count(env):
+    client, _ = env
+    _scan(client)
+    _add_export_dates()
+    assert client.get("/rotate/groups").json() == {"brands": [{"name": "B", "count": 28}]}
 
 
 def test_second_plan_blocked_until_originals_confirmed_deleted(env):
