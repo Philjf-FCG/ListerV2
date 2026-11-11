@@ -52,29 +52,11 @@ def _age_days(listed_at: str | None) -> int | None:
         return None
 
 
-def _backfill_pick_log(conn) -> None:
-    """One-off recovery for picks made before the pick log existed: every folder in
-    rotation_backups was a pick, and its original.json records when. Only runs while the
-    log is empty, so it can't double-count once real picks are being recorded."""
-    if conn.execute("SELECT COUNT(*) FROM rotation_picks").fetchone()[0] or not _BACKUP_DIR.is_dir():
-        return
-    for meta_file in _BACKUP_DIR.glob("*/original.json"):
-        try:
-            picked_at = json.loads(meta_file.read_text(encoding="utf-8")).get("backed_up_at")
-        except (OSError, json.JSONDecodeError):
-            continue
-        if picked_at:
-            conn.execute(
-                "INSERT INTO rotation_picks (vinted_id, picked_at) VALUES (?, ?)", (meta_file.parent.name, picked_at)
-            )
-
-
 def _live_items(conn) -> tuple[list[dict], str | None]:
     """Items present in the most recent full wardrobe scan (one per Vinted id), joined
     with the export's real upload date/details. Each gets effective_at: the later of its
     real upload date and its last rotation pick, because a picked item is treated as
     relisted at that moment. Returns (items, scan_at)."""
-    _backfill_pick_log(conn)
     last_picks = {
         r["vinted_id"]: r["m"]
         for r in conn.execute("SELECT vinted_id, MAX(picked_at) AS m FROM rotation_picks GROUP BY vinted_id")
@@ -82,8 +64,11 @@ def _live_items(conn) -> tuple[list[dict], str | None]:
     scan_at = conn.execute("SELECT MAX(last_seen_at) AS m FROM vinted_items").fetchone()["m"]
     if not scan_at:
         return [], None
+    # Deliberately NOT filtering on `dismissed`: that flag means "hidden from the Vinted->eBay
+    # sync screen" and says nothing about whether the item is still for sale on Vinted.
+    # An original the user has confirmed deleting (rotated_at) is the only thing excluded.
     rows = conn.execute(
-        "SELECT * FROM vinted_items WHERE last_seen_at = ? AND dismissed = 0 ORDER BY id", (scan_at,)
+        "SELECT * FROM vinted_items WHERE last_seen_at = ? AND rotated_at IS NULL ORDER BY id", (scan_at,)
     ).fetchall()
     export = {r["vinted_id"]: dict(r) for r in conn.execute("SELECT * FROM vinted_export_items").fetchall()}
 

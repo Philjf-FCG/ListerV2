@@ -152,16 +152,45 @@ def test_picked_item_is_ranked_as_if_relisted_at_the_pick_time(env):
     assert picked_at > listed  # the real date is untouched; the pick time just outranks it
 
 
-def test_pick_history_is_recovered_from_backup_folders(env):
+def test_a_backup_folder_alone_does_not_count_as_a_pick(env, monkeypatch):
+    """An item whose copy generation failed leaves a backup folder but no draft - it must stay eligible."""
     client, _ = env
     _scan(client)
     _add_export_dates()
-    folder = rotate._BACKUP_DIR / str(FIRST_ID)  # the oldest item, picked before the log existed
-    folder.mkdir(parents=True)
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    (folder / "original.json").write_text(json.dumps({"backed_up_at": now}))
-    oldest = [o["vinted_id"] for o in client.get("/rotate/status").json()["oldest"]]
-    assert str(FIRST_ID) not in oldest and len(oldest) == 20
+
+    def failing_copy(**kwargs):
+        raise RuntimeError("ollama unavailable")
+
+    monkeypatch.setattr(rotate, "generate_listing_copy", failing_copy)
+    result = client.post("/rotate/plan").json()
+    assert result["picked"] == [] and len(result["skipped"]) == 20  # all 20 tried, none drafted
+    assert any(rotate._BACKUP_DIR.iterdir())  # ...and they did leave backup folders behind
+
+    with db.get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rotation_picks").fetchone()[0] == 0
+    status = client.get("/rotate/status").json()
+    assert len(status["oldest"]) == 20 and all(o["last_rotated_at"] is None for o in status["oldest"])
+
+
+def test_only_drafted_items_are_logged_not_the_whole_pool(env):
+    client, _ = env
+    _scan(client)
+    _add_export_dates()
+    assert len(client.post("/rotate/plan?seed=1").json()["picked"]) == 5
+    with db.get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rotation_picks").fetchone()[0] == 5  # not 20
+    assert len(client.get("/rotate/status").json()["oldest"]) == 20  # the other 15 are still in the pool
+
+
+def test_items_hidden_in_the_ebay_sync_screen_are_still_live_for_rotation(env):
+    client, _ = env
+    _scan(client)
+    _add_export_dates()
+    with db.get_connection() as conn:  # `dismissed` is the legacy sync-screen flag, not "sold"
+        conn.execute("UPDATE vinted_items SET dismissed = 1 WHERE url LIKE '%9000000000-%'")
+    status = client.get("/rotate/status").json()
+    assert status["live_count"] == 30
+    assert str(FIRST_ID) in [o["vinted_id"] for o in status["oldest"]]
 
 
 def _scan_mixed(client):
