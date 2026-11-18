@@ -10,7 +10,9 @@ NAME="${1:?usage: $0 <instance> [user@host]}"; HOST="${2:-root@192.168.1.37}"
 cd "$(git rev-parse --show-toplevel)/backend"
 ROOT="/srv/lister/$NAME"
 VINTED_SRC="${VINTED_SRC:-/c/Vinted/Data/listings}"
-SSH=(ssh -o BatchMode=yes "$HOST")
+# Extra ssh options, e.g. SSH_OPTS="-i ~/.ssh/key -o IdentitiesOnly=yes"
+read -ra EXTRA_SSH <<< "${SSH_OPTS:-}"
+SSH=(ssh -o BatchMode=yes "${EXTRA_SSH[@]}" "$HOST")
 
 if [[ -x .venv/Scripts/python.exe ]]; then PY=.venv/Scripts/python.exe; elif [[ -x .venv/bin/python ]]; then PY=.venv/bin/python; else PY=python; fi
 STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT

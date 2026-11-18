@@ -4,7 +4,9 @@
 # Uses `git archive`, so only tracked files are shipped - never .env, tokens or databases.
 set -euo pipefail
 HOST="${1:-root@192.168.1.37}"; shift || true
-SSH=(ssh -o BatchMode=yes "$HOST")
+# Extra ssh options, e.g. SSH_OPTS="-i ~/.ssh/key -o IdentitiesOnly=yes"
+read -ra EXTRA_SSH <<< "${SSH_OPTS:-}"
+SSH=(ssh -o BatchMode=yes "${EXTRA_SSH[@]}" "$HOST")
 cd "$(git rev-parse --show-toplevel)"
 
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
