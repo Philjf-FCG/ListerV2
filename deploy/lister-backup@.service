@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up Lister instance %i
+
+[Service]
+Type=oneshot
+User=lister-%i
+Group=lister-%i
+ExecStart=/opt/lister/backup-instance.sh %i

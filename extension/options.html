@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Lister - server settings</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.2rem; }
+    label { display: block; margin-top: 1rem; font-weight: 600; font-size: 0.9rem; }
+    input { width: 100%; box-sizing: border-box; padding: 0.4rem; margin-top: 0.25rem; }
+    button { margin-top: 1.25rem; padding: 0.45rem 1rem; cursor: pointer; }
+    .hint { font-size: 0.8rem; color: #666; margin-top: 0.25rem; }
+    #status { margin-top: 1rem; font-size: 0.9rem; }
+    #status.ok { color: #2f855a; }
+    #status.bad { color: #c53030; }
+  </style>
+</head>
+<body>
+  <h1>Lister - server settings</h1>
+  <p class="hint">Where your Lister server is, and the password for your own instance.</p>
+
+  <label for="server">Server address</label>
+  <input id="server" placeholder="http://192.168.1.37:8010" autocomplete="off" />
+  <div class="hint">Include the port. Use http://localhost:8010 if Lister runs on this PC.</div>
+
+  <label for="user">Username</label>
+  <input id="user" autocomplete="off" />
+
+  <label for="password">Password</label>
+  <input id="password" type="password" autocomplete="off" />
+  <div class="hint">Leave empty if your server has no password (local use only).</div>
+
+  <button id="save">Save and test</button>
+  <div id="status"></div>
+
+  <script src="lister-config.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

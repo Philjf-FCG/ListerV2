@@ -2,7 +2,8 @@
 // "Upload"/"Post" button - only fills fields and, if present, clicks an explicit
 // "save as draft" control. Vinted's DOM changes over time; adjust SELECTORS below
 // if fields stop being found (check the console for warnings).
-const LISTER_API_BASE = "http://localhost:8010";
+// The Lister server address and password come from the extension's options page; this
+// script only names API paths and the background worker (background.js) does the fetching.
 const SELECTORS = {
   title: 'input[name="title"], input[data-testid="title-input"]',
   description: 'textarea[name="description"], textarea[data-testid="description-input"]',
@@ -54,9 +55,9 @@ function waitForElement(selector, timeoutMs = 15000) {
   });
 }
 
-function fetchPhotoAsFile(url, filename) {
+function fetchPhotoAsFile(path, filename) {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: "LISTER_FETCH_PHOTO", url }, (response) => {
+    chrome.runtime.sendMessage({ type: "LISTER_FETCH_PHOTO", path }, (response) => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
       if (!response?.ok) return reject(new Error(response?.error || "photo fetch failed"));
       const bytes = Uint8Array.from(atob(response.base64), (c) => c.charCodeAt(0));
@@ -77,7 +78,7 @@ async function uploadPhotos(listing) {
   for (let i = 0; i < photoCount; i++) {
     try {
       const file = await fetchPhotoAsFile(
-        `${LISTER_API_BASE}/listings/${listing.id}/photos/${i}`,
+        `/listings/${listing.id}/photos/${i}`,
         `photo-${i + 1}.jpg`
       );
       files.push(file);

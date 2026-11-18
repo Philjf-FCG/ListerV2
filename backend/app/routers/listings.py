@@ -6,6 +6,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
+from app.config import file_uri_to_path
 from app.db import get_connection
 from app.ollama_client import generate_listing_copy
 from app.photo_sources import google_photos, local
@@ -162,44 +163,13 @@ def get_listing_photo(listing_id: int, index: int):
         
     item = photo_items[index]
     
-    # Handle Vinted export file:// URLs
-    ref_uri = item.ref
-    if ref_uri.lower().startswith("file:///"):
-        try:
-            clean_path = ref_uri[8:]  # Remove 'file:///' prefix
-            # Handle Windows drive letter case: file:///C:/path -> C:/path
-            if clean_path.startswith(":"):  
-                clean_path = clean_path[1:]  # Remove leading colon and slash
-            path = Path(clean_path).resolve()
-            if not path.exists():
-                raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")
-            mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
-            return Response(content=path.read_bytes(), media_type=mime)
-        except HTTPException:
-            raise
-        except OSError:
-            # Fallback to original behavior if path parsing fails
-            pass
-    elif ref_uri.lower().startswith("file://"):
-        try:
-            clean_path = ref_uri[7:]  # Remove 'file://' prefix
-            path = Path(clean_path).resolve()
-            if not path.exists():
-                raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")
-            mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
-            return Response(content=path.read_bytes(), media_type=mime)
-        except HTTPException:
-            raise
-        except OSError:
-            # Fallback to original behavior if path parsing fails
-            pass
-    
-    # Original functionality continues here - this part should work as before
-    if item.source == "local":
-        path = Path(item.ref)
+    # Local photos (plain paths, or the file:// URIs the Vinted export importer stores)
+    if item.source == "local" or item.ref.lower().startswith("file://"):
+        path = file_uri_to_path(item.ref)
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"Local photo not found: {item.ref}")
-        return Response(content=path.read_bytes(), media_type="image/jpeg")
+        mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+        return Response(content=path.read_bytes(), media_type=mime)
 
     if item.source == "google_photos":
         try:

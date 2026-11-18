@@ -21,7 +21,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from PIL import Image
 
-from app.config import BACKEND_DIR
+from app.config import BACKEND_DIR, default_vinted_export_index
 from app.db import get_connection
 from app.ollama_client import generate_listing_copy
 from app.photo_sources import local
@@ -255,12 +255,13 @@ def scan(items: list[VintedItemIn]):
 
 
 @router.post("/import-dates")
-def import_dates(export_path: str = r"c:\vinted\data\listings\index.html"):
+def import_dates(export_path: str | None = None):
     """Loads real upload dates/details from the Vinted data export into vinted_export_items
     only. Unlike /sync/import-vinted-export this never touches vinted_items, so it can't
     disturb eBay import links or scan state, and it's safe to re-run."""
     from app.vinted_export_parser import parse_vinted_export
 
+    export_path = export_path or default_vinted_export_index()
     if not Path(export_path).exists():
         raise HTTPException(status_code=404, detail=f"Export file not found: {export_path}")
     try:

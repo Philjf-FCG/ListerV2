@@ -1,0 +1,27 @@
+# systemd template unit: one service per instance, e.g. lister@phil.service
+# Each instance runs as its own system user (lister-<name>) and can only write its own tree.
+[Unit]
+Description=Lister (%i)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lister-%i
+Group=lister-%i
+WorkingDirectory=/srv/lister/%i/backend
+EnvironmentFile=/etc/lister/%i.service.env
+ExecStart=/srv/lister/%i/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${LISTER_PORT}
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadWritePaths=/srv/lister/%i
+
+[Install]
+WantedBy=multi-user.target

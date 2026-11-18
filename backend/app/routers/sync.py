@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException
 from PIL import Image
 
 from app import ebay_client
-from app.config import BACKEND_DIR, get_settings
+from app.config import BACKEND_DIR, default_vinted_export_index, file_uri_to_path, get_settings
 from app.db import get_connection
 from app.ollama_client import generate_listing_copy
 from app.photo_sources import local
@@ -301,8 +301,7 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
         for url in photo_urls:
             try:
                 if url.lower().startswith("file://"):
-                    clean_path = url[8:] if url.lower().startswith("file:///") else url[7:]
-                    p = Path(clean_path).resolve()
+                    p = file_uri_to_path(url).resolve()
                     if not p.exists():
                         print(f"Warning: Local photo file not found: {p}")
                         continue
@@ -399,12 +398,12 @@ def import_vinted_item(vinted_item_id: int, item_hint: str | None = None):
 
 
 @router.post("/import-vinted-export")
-def import_vinted_export(
-    export_path: str = r"c:\vinted\data\listings\index.html"
-):
+def import_vinted_export(export_path: str | None = None):
     """Import Vinted data export HTML file and upsert items into database."""
     from app.vinted_export_parser import parse_vinted_export
-    
+
+    export_path = export_path or default_vinted_export_index()
+
     if not Path(export_path).exists():
         raise HTTPException(status_code=404, detail=f"Export file not found: {export_path}")
     

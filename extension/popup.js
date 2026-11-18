@@ -1,4 +1,4 @@
-const LISTER_API_BASE = "http://localhost:8010";
+// Server address/password: see lister-config.js and the options page.
 const listEl = document.getElementById("list");
 
 const SITE_URLS = {
@@ -12,11 +12,16 @@ const SITE_URLS = {
 
 async function loadReadyListings() {
   try {
-    const res = await fetch(`${LISTER_API_BASE}/listings?status=reviewed_ready`);
-    const listings = await res.json();
-    render(listings);
+    const res = await listerFetch("/listings?status=reviewed_ready");
+    if (!res.ok) throw new Error(listerHttpError(res.status));
+    render(await res.json());
   } catch (err) {
-    listEl.innerHTML = `<p class="empty">Can't reach Lister backend at ${LISTER_API_BASE}. Is it running?</p>`;
+    const { base } = await listerSettings();
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = `Can't reach Lister at ${base}: ${err.message || err}. Check the extension options (right-click the extension > Options).`;
+    listEl.textContent = "";
+    listEl.appendChild(p);
   }
 }
 
@@ -97,7 +102,7 @@ async function syncVintedListings() {
       statusEl.textContent = "Found 0 items on this page - make sure you're on your Vinted Profile page showing your items.";
       return;
     }
-    const res = await fetch(`${LISTER_API_BASE}/sync/vinted/items`, {
+    const res = await listerFetch("/sync/vinted/items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(items),
@@ -116,9 +121,9 @@ const rotationStatusEl = document.getElementById("rotation-status");
 const rotationListEl = document.getElementById("rotation-list");
 
 async function apiJson(path, options) {
-  const res = await fetch(`${LISTER_API_BASE}${path}`, options);
+  const res = await listerFetch(path, options);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.detail || `backend returned ${res.status}`);
+  if (!res.ok) throw new Error(body.detail || listerHttpError(res.status));
   return body;
 }
 
@@ -238,6 +243,7 @@ async function loadGroups() {
   }
 }
 
+document.getElementById("open-options-btn").addEventListener("click", () => chrome.runtime.openOptionsPage());
 document.getElementById("sync-vinted-btn").addEventListener("click", syncVintedListings);
 document.getElementById("scan-wardrobe-btn")?.addEventListener("click", scanWardrobe);
 document.getElementById("plan-rotation-btn")?.addEventListener("click", planRotation);
