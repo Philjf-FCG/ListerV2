@@ -45,5 +45,6 @@ if [[ ! -e "$ENV_FILE" ]]; then
 else
   echo "kept existing $ENV_FILE"
 fi
-systemctl enable "lister@$NAME.service" "lister-backup@$NAME.timer" >/dev/null 2>&1 || true
+systemctl enable "lister@$NAME.service" >/dev/null 2>&1 || true
+systemctl enable --now "lister-backup@$NAME.timer" >/dev/null 2>&1 || true
 echo "provisioned instance '$NAME' on port $PORT (user $SVC_USER, tree $ROOT)"

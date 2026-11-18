@@ -5,7 +5,7 @@ set -euo pipefail
 NAME="${1:?usage: $0 <name>}"
 ROOT="/srv/lister/$NAME"
 DEST="$ROOT/backups/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$DEST"
+mkdir -p "$DEST" && chmod 0700 "$DEST"
 "$ROOT/venv/bin/python" - "$ROOT/backend/lister.db" "$DEST/lister.db" <<'PY'
 import sqlite3, sys
 src, dst = sqlite3.connect(sys.argv[1]), sqlite3.connect(sys.argv[2])
@@ -15,6 +15,7 @@ PY
 for f in google_token.json ebay_token.json .env; do
   [[ -e "$ROOT/backend/$f" ]] && install -m 0600 "$ROOT/backend/$f" "$DEST/$f"
 done
+chmod 0600 "$DEST/lister.db"
 # keep the newest 14 backups
 ls -1dt "$ROOT"/backups/*/ | tail -n +15 | xargs -r rm -rf
 echo "backup written to $DEST"
